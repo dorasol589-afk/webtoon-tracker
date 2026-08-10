@@ -33,6 +33,14 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return out;
 }
 
+// 네이버 API가 같은 회차 번호(no)를 중복으로 내려주는 경우가 있어 upsert 전 제거 필요
+// (그대로 두면 "ON CONFLICT DO UPDATE command cannot affect row a second time"로 배치 전체가 실패함)
+function dedupeBy<T>(arr: T[], keyFn: (item: T) => string): T[] {
+  const map = new Map<string, T>();
+  for (const item of arr) map.set(keyFn(item), item);
+  return [...map.values()];
+}
+
 async function main() {
   const startedAt = Date.now();
   const titleLimit = process.env.TITLE_LIMIT ? parseInt(process.env.TITLE_LIMIT, 10) : undefined;
@@ -90,13 +98,16 @@ async function main() {
           totalEpisodeCount += episodes.length;
 
           if (supabase) {
-            const episodeRows = episodes.map((e) => ({
-              title_id: title.titleId,
-              no: e.no,
-              subtitle: e.subtitle,
-              service_date: parseServiceDate(e.serviceDateDescription),
-              is_free: !e.charge,
-            }));
+            const episodeRows = dedupeBy(
+              episodes.map((e) => ({
+                title_id: title.titleId,
+                no: e.no,
+                subtitle: e.subtitle,
+                service_date: parseServiceDate(e.serviceDateDescription),
+                is_free: !e.charge,
+              })),
+              (r) => String(r.no)
+            );
             for (const batch of chunk(episodeRows, 500)) {
               const { error } = await supabase.from("episodes").upsert(batch, {
                 onConflict: "title_id,no",
@@ -117,8 +128,10 @@ async function main() {
       })
     )
   );
+  const dedupedFreeEpisodes = dedupeBy(freeEpisodes, (e) => `${e.titleId}_${e.no}`);
   console.log(
-    `  전체 회차 ${totalEpisodeCount}개 중 무료회차 ${freeEpisodes.length}개 (회차조회 실패 ${episodeFetchFailures}건)`
+    `  전체 회차 ${totalEpisodeCount}개 중 무료회차 ${dedupedFreeEpisodes.length}개 ` +
+      `(중복 ${freeEpisodes.length - dedupedFreeEpisodes.length}건 제거, 회차조회 실패 ${episodeFetchFailures}건)`
   );
 
   console.log(`[3/4] 무료회차 댓글수 수집...`);
@@ -133,7 +146,7 @@ async function main() {
   }[] = [];
 
   await Promise.all(
-    freeEpisodes.map((ep) =>
+    dedupedFreeEpisodes.map((ep) =>
       commentLimit(async () => {
         try {
           const stats = await fetchCommentStats(ep.titleId, ep.no);
@@ -151,22 +164,23 @@ async function main() {
       })
     )
   );
-  console.log(`  댓글수 수집 완료: 성공 ${snapshots.length}건, 실패 ${commentFailures}건`);
+  const dedupedSnapshots = dedupeBy(snapshots, (s) => `${s.title_id}_${s.no}`);
+  console.log(`  댓글수 수집 완료: 성공 ${dedupedSnapshots.length}건, 실패 ${commentFailures}건`);
 
   console.log(`[4/4] 결과 저장...`);
   if (supabase) {
-    for (const batch of chunk(snapshots, 500)) {
+    for (const batch of chunk(dedupedSnapshots, 500)) {
       const { error } = await supabase
         .from("comment_snapshots")
         .upsert(batch, { onConflict: "title_id,no,snapshot_date" });
       if (error) console.error("  comment_snapshots upsert 실패:", error.message);
     }
-    console.log(`  Supabase에 ${snapshots.length}건 저장 완료`);
+    console.log(`  Supabase에 ${dedupedSnapshots.length}건 저장 완료`);
   } else {
     console.log("  드라이런 모드 - 샘플 20건 출력:");
-    const byComment = [...snapshots].sort((a, b) => b.comment_count - a.comment_count);
+    const byComment = [...dedupedSnapshots].sort((a, b) => b.comment_count - a.comment_count);
     for (const s of byComment.slice(0, 20)) {
-      const title = freeEpisodes.find((e) => e.titleId === s.title_id && e.no === s.no);
+      const title = dedupedFreeEpisodes.find((e) => e.titleId === s.title_id && e.no === s.no);
       console.log(
         `    ${title?.titleName ?? s.title_id} ${s.no}화 - 댓글 ${s.comment_count}개 (전체 ${s.post_count}개)`
       );
@@ -175,8 +189,8 @@ async function main() {
 
   const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
-    `\n완료: 작품 ${titles.length}개, 회차 ${totalEpisodeCount}개, 무료회차 ${freeEpisodes.length}개, ` +
-      `댓글수집 성공 ${snapshots.length}건 / 실패 ${commentFailures}건, 소요시간 ${elapsedSec}초`
+    `\n완료: 작품 ${titles.length}개, 회차 ${totalEpisodeCount}개, 무료회차 ${dedupedFreeEpisodes.length}개, ` +
+      `댓글수집 성공 ${dedupedSnapshots.length}건 / 실패 ${commentFailures}건, 소요시간 ${elapsedSec}초`
   );
 }
 
