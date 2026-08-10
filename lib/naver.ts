@@ -3,7 +3,8 @@
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+// dailyPlus(매일+)는 요일별 목록과 거의 겹치지 않는 별도 카테고리라 반드시 함께 조회해야 함
+const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun", "dailyPlus"] as const;
 export type Weekday = (typeof WEEKDAYS)[number];
 
 export interface TitleListItem {
