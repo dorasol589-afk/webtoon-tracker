@@ -194,13 +194,15 @@ as $$
   limit result_limit;
 $$;
 
--- 네이버가 제공하지 않는 "전체 웹툰 랭킹"을 우리가 수집한 평점으로 직접 구성
-create or replace function overall_star_ranking(result_limit int default 50)
+drop function if exists overall_star_ranking(int);
+
+-- 요일별 인기순위 (네이버 order=user 기준, 해당 요일 안에서의 순위)
+create or replace function weekday_popularity_ranking(target_weekday text, result_limit int default 30)
 returns table (
   title_id bigint,
   title_name text,
   thumbnail_url text,
-  star_score numeric
+  popularity_rank integer
 )
 language sql
 stable
@@ -208,15 +210,47 @@ as $$
   with latest as (
     select snapshot_date from title_snapshots order by snapshot_date desc limit 1
   )
-  select ts.title_id, ti.title_name, ti.thumbnail_url, ts.star_score
+  select ts.title_id, ti.title_name, ti.thumbnail_url, ts.popularity_rank
   from title_snapshots ts
   join latest on ts.snapshot_date = latest.snapshot_date
   join titles ti on ti.title_id = ts.title_id
-  where ts.star_score is not null and ti.is_active = true
-  order by ts.star_score desc
+  where ts.weekday = target_weekday and ts.popularity_rank is not null and ti.is_active = true
+  order by ts.popularity_rank asc
+  limit result_limit;
+$$;
+
+-- 최근 launch_date(1화 등록일)가 days_back일 이내인 작품들을 인기순위(요일 내 순위)로 정렬.
+-- 요일이 다르면 순위 숫자가 완전히 동일 기준은 아니지만(요일별로 리셋됨), 신작 풀이 작아 참고용으로는 충분함.
+create or replace function new_release_popularity_ranking(days_back int default 90, result_limit int default 30)
+returns table (
+  title_id bigint,
+  title_name text,
+  thumbnail_url text,
+  launch_date date,
+  popularity_rank integer,
+  weekday text
+)
+language sql
+stable
+as $$
+  with latest as (
+    select snapshot_date from title_snapshots order by snapshot_date desc limit 1
+  ),
+  launch as (
+    select title_id, min(service_date) as launch_date
+    from episodes
+    group by title_id
+  )
+  select ti.title_id, ti.title_name, ti.thumbnail_url, l.launch_date, ts.popularity_rank, ts.weekday
+  from launch l
+  join titles ti on ti.title_id = l.title_id
+  left join title_snapshots ts on ts.title_id = l.title_id and ts.snapshot_date = (select snapshot_date from latest)
+  where l.launch_date >= (current_date - days_back) and ti.is_active = true
+  order by ts.popularity_rank asc nulls last, l.launch_date desc
   limit result_limit;
 $$;
 
 grant execute on function latest_snapshot_date() to anon;
 grant execute on function top_movers(int) to anon;
-grant execute on function overall_star_ranking(int) to anon;
+grant execute on function weekday_popularity_ranking(text, int) to anon;
+grant execute on function new_release_popularity_ranking(int, int) to anon;

@@ -2,15 +2,48 @@ import Link from "next/link";
 import {
   getTopMovers,
   searchTitles,
-  getOverallStarRanking,
   getSeriesWatchlistLatest,
+  getWeekdayPopularityRanking,
+  getNewReleasePopularityRanking,
   type TitleRow,
   type TopMoverRow,
-  type StarRankingRow,
   type SeriesWatchRow,
+  type PopularityRankRow,
+  type NewReleaseRankRow,
+  type Weekday,
 } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
+
+const WEEKDAYS: { value: Weekday; label: string }[] = [
+  { value: "MONDAY", label: "월" },
+  { value: "TUESDAY", label: "화" },
+  { value: "WEDNESDAY", label: "수" },
+  { value: "THURSDAY", label: "목" },
+  { value: "FRIDAY", label: "금" },
+  { value: "SATURDAY", label: "토" },
+  { value: "SUNDAY", label: "일" },
+  { value: "DAILY_PLUS", label: "매일+" },
+];
+
+function getTodayWeekdayKST(): Weekday {
+  const now = new Date();
+  const kst = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  const map: Weekday[] = [
+    "SUNDAY",
+    "MONDAY",
+    "TUESDAY",
+    "WEDNESDAY",
+    "THURSDAY",
+    "FRIDAY",
+    "SATURDAY",
+  ];
+  return map[kst.getDay()];
+}
+
+function isWeekday(value: string): value is Weekday {
+  return WEEKDAYS.some((w) => w.value === value);
+}
 
 function DeltaBadge({ delta }: { delta: number }) {
   if (delta <= 0) return null;
@@ -27,21 +60,25 @@ type LoadResult =
   | {
       type: "movers";
       movers: TopMoverRow[];
-      starRanking: StarRankingRow[];
+      weekdayRanking: PopularityRankRow[];
+      selectedWeekday: Weekday;
+      newReleaseRanking: NewReleaseRankRow[];
       seriesWatch: SeriesWatchRow[];
     };
 
-async function loadData(q: string | undefined): Promise<LoadResult> {
+async function loadData(q: string | undefined, weekdayParam: string | undefined): Promise<LoadResult> {
   try {
     if (q) {
       return { type: "search", titles: await searchTitles(q) };
     }
-    const [movers, starRanking, seriesWatch] = await Promise.all([
+    const selectedWeekday = weekdayParam && isWeekday(weekdayParam) ? weekdayParam : getTodayWeekdayKST();
+    const [movers, weekdayRanking, newReleaseRanking, seriesWatch] = await Promise.all([
       getTopMovers(30),
-      getOverallStarRanking(10),
+      getWeekdayPopularityRanking(selectedWeekday, 15),
+      getNewReleasePopularityRanking(90, 15),
       getSeriesWatchlistLatest(),
     ]);
-    return { type: "movers", movers, starRanking, seriesWatch };
+    return { type: "movers", movers, weekdayRanking, selectedWeekday, newReleaseRanking, seriesWatch };
   } catch {
     return { type: "error" };
   }
@@ -50,10 +87,10 @@ async function loadData(q: string | undefined): Promise<LoadResult> {
 export default async function HomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; weekday?: string }>;
 }) {
-  const { q } = await searchParams;
-  const result = await loadData(q);
+  const { q, weekday } = await searchParams;
+  const result = await loadData(q, weekday);
 
   return (
     <div>
@@ -138,20 +175,59 @@ export default async function HomePage({
           </div>
 
           <div>
-            <h2 className="mb-3 text-sm font-semibold text-neutral-500">평점 TOP 10</h2>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-neutral-500">요일별 인기순위</h2>
+              <div className="flex gap-1">
+                {WEEKDAYS.map((w) => (
+                  <Link
+                    key={w.value}
+                    href={`/?weekday=${w.value}`}
+                    className={`rounded px-1.5 py-0.5 text-xs ${
+                      w.value === result.selectedWeekday
+                        ? "bg-neutral-800 text-white"
+                        : "text-neutral-500 hover:bg-neutral-100"
+                    }`}
+                  >
+                    {w.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
             <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
-              {result.starRanking.length === 0 && (
+              {result.weekdayRanking.length === 0 && (
                 <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
               )}
-              {result.starRanking.map((s, i) => (
-                <li key={s.title_id}>
+              {result.weekdayRanking.map((r) => (
+                <li key={r.title_id}>
                   <Link
-                    href={`/webtoon/${s.title_id}`}
+                    href={`/webtoon/${r.title_id}`}
+                    className="flex items-center gap-2 p-2.5 hover:bg-neutral-50"
+                  >
+                    <span className="w-5 shrink-0 text-center text-xs text-neutral-400">
+                      {r.popularity_rank}
+                    </span>
+                    <span className="flex-1 truncate text-sm font-medium">{r.title_name}</span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+
+            <h2 className="mb-3 mt-8 text-sm font-semibold text-neutral-500">
+              신작 인기순위 (최근 90일 이내 1화)
+            </h2>
+            <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
+              {result.newReleaseRanking.length === 0 && (
+                <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
+              )}
+              {result.newReleaseRanking.map((r, i) => (
+                <li key={r.title_id}>
+                  <Link
+                    href={`/webtoon/${r.title_id}`}
                     className="flex items-center gap-2 p-2.5 hover:bg-neutral-50"
                   >
                     <span className="w-5 shrink-0 text-center text-xs text-neutral-400">{i + 1}</span>
-                    <span className="flex-1 truncate text-sm font-medium">{s.title_name}</span>
-                    <span className="shrink-0 text-xs text-amber-700">★ {s.star_score.toFixed(2)}</span>
+                    <span className="flex-1 truncate text-sm font-medium">{r.title_name}</span>
+                    <span className="shrink-0 text-xs text-neutral-400">{r.launch_date}</span>
                   </Link>
                 </li>
               ))}

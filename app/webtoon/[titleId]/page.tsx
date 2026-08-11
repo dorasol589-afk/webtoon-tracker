@@ -92,7 +92,10 @@ export default async function TitlePage({
               )}
               {snapshot.weekday && snapshot.popularity_rank && (
                 <span className="rounded bg-blue-100 px-2 py-1 text-blue-800">
-                  {WEEKDAY_KO[snapshot.weekday] ?? snapshot.weekday}요일 인기 {snapshot.popularity_rank}위
+                  {snapshot.weekday === "DAILY_PLUS"
+                    ? "매일+"
+                    : `${WEEKDAY_KO[snapshot.weekday] ?? snapshot.weekday}요일`}{" "}
+                  인기 {snapshot.popularity_rank}위
                 </span>
               )}
               {snapshot.weekday && snapshot.rating_rank && (

@@ -137,19 +137,30 @@ export async function fetchAllOngoingTitles(): Promise<TitleListItem[]> {
 /**
  * 요일별 랭킹 (order=user: 인기순, order=star: 별점순, order=view: 조회순).
  * 응답이 {weekday: [...]} 형태의 맵으로 오며, 배열 내 순서가 곧 해당 요일 안에서의 순위.
- * 요일 그룹 안에서만 유효한 순위이며, 네이버가 플랫폼 전체를 아우르는 단일 랭킹은 제공하지 않음.
+ * 이 맵 API는 매일+(dailyPlus)를 포함하지 않으므로, week=dailyPlus&order=X를 별도로 불러
+ * weekday="DAILY_PLUS"로 합쳐준다. 요일(또는 매일+) 그룹 안에서만 유효한 순위이며,
+ * 네이버가 플랫폼 전체를 아우르는 단일 랭킹은 제공하지 않음.
  */
 export async function fetchWeekdayRankMap(order: RankOrder): Promise<Map<number, RankInfo>> {
-  const data = await fetchJsonWithRetry<{ titleListMap: Record<string, TitleListItem[]> }>(
-    `https://comic.naver.com/api/webtoon/titlelist/weekday?order=${order}`,
-    { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
-  );
+  const [mapData, dailyPlusData] = await Promise.all([
+    fetchJsonWithRetry<{ titleListMap: Record<string, TitleListItem[]> }>(
+      `https://comic.naver.com/api/webtoon/titlelist/weekday?order=${order}`,
+      { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
+    ),
+    fetchJsonWithRetry<{ titleList: TitleListItem[] }>(
+      `https://comic.naver.com/api/webtoon/titlelist/weekday?week=dailyPlus&order=${order}`,
+      { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
+    ),
+  ]);
   const result = new Map<number, RankInfo>();
-  for (const [weekday, titles] of Object.entries(data.titleListMap)) {
+  for (const [weekday, titles] of Object.entries(mapData.titleListMap)) {
     titles.forEach((t, i) => {
       result.set(t.titleId, { weekday, rank: i + 1 });
     });
   }
+  dailyPlusData.titleList.forEach((t, i) => {
+    result.set(t.titleId, { weekday: "DAILY_PLUS", rank: i + 1 });
+  });
   return result;
 }
 

@@ -122,19 +122,58 @@ export async function getEpisodeHistory(titleId: number, no: number): Promise<Sn
   return (data ?? []) as SnapshotPoint[];
 }
 
-export interface StarRankingRow {
+export type Weekday =
+  | "MONDAY"
+  | "TUESDAY"
+  | "WEDNESDAY"
+  | "THURSDAY"
+  | "FRIDAY"
+  | "SATURDAY"
+  | "SUNDAY"
+  | "DAILY_PLUS";
+
+export interface PopularityRankRow {
   title_id: number;
   title_name: string;
   thumbnail_url: string | null;
-  star_score: number;
+  popularity_rank: number;
 }
 
-/** 평점 TOP N (네이버가 제공하지 않는 "전체 웹툰 랭킹"을 직접 계산) */
-export async function getOverallStarRanking(limit = 10): Promise<StarRankingRow[]> {
+/** 요일별 인기순위 (네이버 order=user 기준, 해당 요일 안에서의 순위) */
+export async function getWeekdayPopularityRanking(
+  weekday: Weekday,
+  limit = 20
+): Promise<PopularityRankRow[]> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase.rpc("overall_star_ranking", { result_limit: limit });
+  const { data, error } = await supabase.rpc("weekday_popularity_ranking", {
+    target_weekday: weekday,
+    result_limit: limit,
+  });
   if (error) throw error;
-  return (data ?? []) as StarRankingRow[];
+  return (data ?? []) as PopularityRankRow[];
+}
+
+export interface NewReleaseRankRow {
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  launch_date: string;
+  popularity_rank: number | null;
+  weekday: string | null;
+}
+
+/** 최근 신작(기본 90일 이내 1화) 중 인기순위 */
+export async function getNewReleasePopularityRanking(
+  daysBack = 90,
+  limit = 20
+): Promise<NewReleaseRankRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("new_release_popularity_ranking", {
+    days_back: daysBack,
+    result_limit: limit,
+  });
+  if (error) throw error;
+  return (data ?? []) as NewReleaseRankRow[];
 }
 
 export interface TitleSnapshot {
