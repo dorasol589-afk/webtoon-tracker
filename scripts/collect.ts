@@ -73,6 +73,8 @@ async function main() {
       author: t.author,
       thumbnail_url: t.thumbnailUrl,
       is_active: true,
+      is_finished: t.finish,
+      is_on_hiatus: t.rest,
       last_seen_at: nowIso,
     }));
     for (const batch of chunk(titleRows, 500)) {
@@ -226,29 +228,51 @@ async function main() {
     }
   }
 
-  console.log(`[6/6] 우선 추적 작품 네이버 시리즈 다운로드수 수집...`);
-  let seriesFailures = 0;
-  const seriesRows: { product_no: number; title_id: number; snapshot_date: string; download_count: number }[] = [];
+  console.log(`[6/6] 네이버 시리즈 다운로드수 수집 (우선 추적 5개 + 매칭된 전체)...`);
+  const seriesTargets = new Map<number, { titleId: number; name: string }>();
   for (const item of SERIES_WATCHLIST) {
-    try {
-      const downloadCount = await fetchSeriesDownloadCount(item.productNo);
-      seriesRows.push({
-        product_no: item.productNo,
-        title_id: item.titleId,
-        snapshot_date: snapshotDate,
-        download_count: downloadCount,
-      });
-      console.log(`  ${item.name}: 다운로드 ${downloadCount.toLocaleString()}`);
-    } catch (err) {
-      seriesFailures++;
-      console.error(`  시리즈 다운로드수 조회 실패 (${item.name}, productNo=${item.productNo}):`, err);
+    seriesTargets.set(item.productNo, { titleId: item.titleId, name: item.name });
+  }
+  if (supabase) {
+    const { data: products } = await supabase.from("series_products").select("product_no,title_id,series_title_name");
+    for (const p of products ?? []) {
+      if (!seriesTargets.has(p.product_no)) {
+        seriesTargets.set(p.product_no, { titleId: p.title_id, name: p.series_title_name });
+      }
     }
   }
+  console.log(`  대상 ${seriesTargets.size}개`);
+
+  let seriesFailures = 0;
+  const seriesRows: { product_no: number; title_id: number; snapshot_date: string; download_count: number }[] = [];
+  const seriesLimit = pLimit(6);
+  await Promise.all(
+    [...seriesTargets.entries()].map(([productNo, item]) =>
+      seriesLimit(async () => {
+        try {
+          const downloadCount = await fetchSeriesDownloadCount(productNo);
+          seriesRows.push({
+            product_no: productNo,
+            title_id: item.titleId,
+            snapshot_date: snapshotDate,
+            download_count: downloadCount,
+          });
+        } catch (err) {
+          seriesFailures++;
+          console.error(`  시리즈 다운로드수 조회 실패 (${item.name}, productNo=${productNo}):`, err);
+        }
+      })
+    )
+  );
+  console.log(`  성공 ${seriesRows.length}건 / 실패 ${seriesFailures}건`);
   if (supabase && seriesRows.length > 0) {
-    const { error } = await supabase
-      .from("series_snapshots")
-      .upsert(seriesRows, { onConflict: "product_no,snapshot_date" });
-    if (error) console.error("  series_snapshots upsert 실패:", error.message);
+    for (let i = 0; i < seriesRows.length; i += 500) {
+      const batch = seriesRows.slice(i, i + 500);
+      const { error } = await supabase
+        .from("series_snapshots")
+        .upsert(batch, { onConflict: "product_no,snapshot_date" });
+      if (error) console.error("  series_snapshots upsert 실패:", error.message);
+    }
   }
 
   const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);

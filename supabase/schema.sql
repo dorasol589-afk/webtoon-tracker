@@ -11,6 +11,17 @@ create table if not exists titles (
   last_seen_at  timestamptz not null default now()
 );
 
+-- 이미 배포된 테이블에 새 컬럼을 안전하게 추가 (완결/휴재 여부)
+alter table titles add column if not exists is_finished boolean not null default false;
+alter table titles add column if not exists is_on_hiatus boolean not null default false;
+
+-- 제작사 정보. cpName(예: "대원_회귀한용병은다계획이있다")에서 첫 "_" 앞부분을 studio_key로 씀.
+-- "다중"은 여러 제작사 협업이라 스튜디오를 특정할 신뢰할 만한 공개 정보가 없어 그대로 표기.
+-- 언더스코어가 없으면 개인 작가(제작사 없음)로 간주해 "개인"으로 표기.
+alter table titles add column if not exists studio_key text;
+alter table titles add column if not exists studio_name text;
+alter table titles add column if not exists studio_website_url text;
+
 create table if not exists episodes (
   title_id         bigint not null references titles(title_id),
   no               integer not null,
@@ -54,7 +65,20 @@ create table if not exists title_snapshots (
 create index if not exists idx_title_snapshots_date
   on title_snapshots (snapshot_date);
 
--- 우선 추적 작품의 네이버 시리즈 누적 다운로드수 (lib/seriesWatchlist.ts 참고)
+-- comic.naver.com 작품과 네이버 시리즈(series.naver.com) 작품의 매칭 결과.
+-- lib/seriesWatchlist.ts의 5개는 사용자가 직접 확인한 것이고, 나머지는 검색으로 자동 매칭됨
+-- (scripts/matchSeries.ts). 확신 낮은 건 저장하지 않고 별도 검토용 엑셀로 뽑음.
+create table if not exists series_products (
+  product_no        bigint primary key,
+  title_id          bigint not null references titles(title_id),
+  series_title_name text not null,
+  matched_at        timestamptz not null default now()
+);
+
+create index if not exists idx_series_products_title on series_products (title_id);
+
+-- 시리즈 작품의 누적 다운로드수 일일 스냅샷 (product_no는 series_products에 먼저 등록되어 있어야 함,
+-- 이미 생성된 테이블이라 FK는 걸지 않고 애플리케이션 레벨에서 순서를 보장)
 create table if not exists series_snapshots (
   product_no    bigint not null,
   title_id      bigint references titles(title_id),
@@ -72,6 +96,7 @@ alter table episodes enable row level security;
 alter table comment_snapshots enable row level security;
 alter table title_snapshots enable row level security;
 alter table series_snapshots enable row level security;
+alter table series_products enable row level security;
 
 drop policy if exists "titles are publicly readable" on titles;
 create policy "titles are publicly readable"
@@ -96,6 +121,11 @@ create policy "title_snapshots are publicly readable"
 drop policy if exists "series_snapshots are publicly readable" on series_snapshots;
 create policy "series_snapshots are publicly readable"
   on series_snapshots for select
+  using (true);
+
+drop policy if exists "series_products are publicly readable" on series_products;
+create policy "series_products are publicly readable"
+  on series_products for select
   using (true);
 
 -- service_role 키는 RLS를 우회하므로 쓰기용 정책은 별도로 필요 없음 (수집기는 service role key 사용)

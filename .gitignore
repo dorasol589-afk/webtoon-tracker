@@ -43,3 +43,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 일회성 스크립트(scripts/matchSeries.ts, matchStudios.ts, gather_cpnames.ts)가 만드는
+# 중간 데이터 캐시/엑셀 - DB가 최신이라 재생성 가능, 커밋 불필요
+/cpnames.json
+/studio_websites.json
+/series_match_*.json
+*.xlsx

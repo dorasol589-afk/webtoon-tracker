@@ -13,6 +13,7 @@ export interface TitleListItem {
   author: string;
   thumbnailUrl: string;
   finish: boolean;
+  rest: boolean;
   starScore: number;
 }
 

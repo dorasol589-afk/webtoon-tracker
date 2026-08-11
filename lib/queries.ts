@@ -7,6 +7,10 @@ export interface TitleRow {
   author: string | null;
   thumbnail_url: string | null;
   is_active: boolean;
+  is_finished: boolean;
+  is_on_hiatus: boolean;
+  studio_name: string | null;
+  studio_website_url: string | null;
 }
 
 export interface EpisodeRow {
@@ -48,7 +52,7 @@ export async function searchTitles(query: string): Promise<TitleRow[]> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active")
+    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,studio_name,studio_website_url")
     .eq("is_active", true)
     .ilike("title_name", `%${query}%`)
     .order("title_name")
@@ -61,7 +65,7 @@ export async function getTitle(titleId: number): Promise<TitleRow | null> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active")
+    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,studio_name,studio_website_url")
     .eq("title_id", titleId)
     .maybeSingle();
   if (error) throw error;
@@ -196,6 +200,24 @@ export async function getSeriesWatchlistLatest(): Promise<SeriesWatchRow[]> {
       snapshot_date: latest?.snapshot_date ?? "",
     };
   }).sort((a, b) => b.download_count - a.download_count);
+}
+
+/** 작품이 네이버 시리즈와 매칭되어 있으면 productNo/이름 반환 (우선 워치리스트 + DB 매칭 전체) */
+export async function getSeriesProductForTitle(
+  titleId: number
+): Promise<{ productNo: number; name: string } | null> {
+  const seed = SERIES_WATCHLIST.find((w) => w.titleId === titleId);
+  if (seed) return { productNo: seed.productNo, name: seed.name };
+
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("series_products")
+    .select("product_no,series_title_name")
+    .eq("title_id", titleId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return { productNo: data.product_no, name: data.series_title_name };
 }
 
 export interface SeriesSnapshotPoint {

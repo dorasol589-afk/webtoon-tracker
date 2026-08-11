@@ -4,9 +4,9 @@ import {
   getTitle,
   getEpisodesWithLatestCount,
   getLatestTitleSnapshot,
+  getSeriesProductForTitle,
   getSeriesHistory,
 } from "@/lib/queries";
-import { SERIES_WATCHLIST } from "@/lib/seriesWatchlist";
 import SeriesDownloadChart from "./SeriesDownloadChart";
 
 export const dynamic = "force-dynamic";
@@ -33,12 +33,12 @@ export default async function TitlePage({
   const title = await getTitle(id);
   if (!title) notFound();
 
-  const seriesWatch = SERIES_WATCHLIST.find((w) => w.titleId === id);
+  const seriesProduct = await getSeriesProductForTitle(id);
 
   const [episodes, snapshot, seriesHistory] = await Promise.all([
     getEpisodesWithLatestCount(id),
     getLatestTitleSnapshot(id),
-    seriesWatch ? getSeriesHistory(seriesWatch.productNo) : Promise.resolve([]),
+    seriesProduct ? getSeriesHistory(seriesProduct.productNo) : Promise.resolve([]),
   ]);
 
   return (
@@ -51,10 +51,37 @@ export default async function TitlePage({
         <div>
           <h1 className="text-xl font-semibold">{title.title_name}</h1>
           <p className="text-sm text-neutral-500">{title.author}</p>
-          {!title.is_active && (
-            <span className="mt-1 inline-block rounded bg-neutral-200 px-2 py-0.5 text-xs text-neutral-600">
-              현재 연재목록에서 제외됨 (완결 또는 휴재 가능)
+          {title.is_finished && (
+            <span className="mt-1 inline-block rounded bg-neutral-700 px-2 py-0.5 text-xs text-white">
+              완결
             </span>
+          )}
+          {title.is_on_hiatus && (
+            <span className="mt-1 inline-block rounded bg-orange-200 px-2 py-0.5 text-xs text-orange-800">
+              휴재중
+            </span>
+          )}
+          {!title.is_active && !title.is_finished && !title.is_on_hiatus && (
+            <span className="mt-1 inline-block rounded bg-neutral-200 px-2 py-0.5 text-xs text-neutral-600">
+              현재 연재목록에서 제외됨
+            </span>
+          )}
+          {title.studio_name && (
+            <p className="mt-1 text-sm text-neutral-500">
+              제작사:{" "}
+              {title.studio_website_url ? (
+                <a
+                  href={title.studio_website_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline"
+                >
+                  {title.studio_name}
+                </a>
+              ) : (
+                title.studio_name
+              )}
+            </p>
           )}
           {snapshot && (
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -83,7 +110,7 @@ export default async function TitlePage({
         </div>
       </div>
 
-      {seriesWatch && (
+      {seriesProduct && (
         <div className="mb-6">
           <h2 className="mb-2 text-sm font-semibold text-neutral-500">
             네이버 시리즈 누적 다운로드수
