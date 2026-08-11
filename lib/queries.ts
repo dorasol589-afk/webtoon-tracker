@@ -153,30 +153,8 @@ export async function getWeekdayPopularityRanking(
   return (data ?? []) as PopularityRankRow[];
 }
 
-export interface NewReleaseRankRow {
-  title_id: number;
-  title_name: string;
-  thumbnail_url: string | null;
-  launch_date: string;
-  popularity_rank: number | null;
-  weekday: string | null;
-}
-
-/** 최근 신작(기본 90일 이내 1화) 중 인기순위 */
-export async function getNewReleasePopularityRanking(
-  daysBack = 90,
-  limit = 20
-): Promise<NewReleaseRankRow[]> {
-  const supabase = getSupabaseAnon();
-  const { data, error } = await supabase.rpc("new_release_popularity_ranking", {
-    days_back: daysBack,
-    result_limit: limit,
-  });
-  if (error) throw error;
-  return (data ?? []) as NewReleaseRankRow[];
-}
-
 export type RealtimeRankCategory = "TOTAL" | "MALE" | "FEMALE";
+export type RealtimeRankTabType = "DEFAULT" | "NEW";
 
 export interface RealtimeRankRow {
   rank: number;
@@ -185,9 +163,13 @@ export interface RealtimeRankRow {
   thumbnail_url: string | null;
 }
 
-/** 네이버 실시간 랭킹 TOP5 (요일 구분 없는 진짜 플랫폼 전체 순위, 전체/남성/여성) */
+/**
+ * 네이버 실시간 랭킹 TOP5 (요일 구분 없는 진짜 플랫폼 전체 순위, 전체/남성/여성).
+ * rankTabType=DEFAULT: 실시간 인기랭킹, NEW: 실시간 신작랭킹.
+ */
 export async function getRealtimeRanking(
-  category: RealtimeRankCategory
+  category: RealtimeRankCategory,
+  rankTabType: RealtimeRankTabType = "DEFAULT"
 ): Promise<RealtimeRankRow[]> {
   const supabase = getSupabaseAnon();
   const latestDate = await getLatestSnapshotDate();
@@ -195,6 +177,7 @@ export async function getRealtimeRanking(
   const { data, error } = await supabase
     .from("realtime_ranking_snapshots")
     .select("rank,title_id,titles(title_name,thumbnail_url)")
+    .eq("rank_tab_type", rankTabType)
     .eq("category", category)
     .eq("snapshot_date", latestDate)
     .order("rank", { ascending: true });
@@ -237,6 +220,7 @@ export interface SeriesWatchRow {
   product_no: number;
   title_id: number;
   title_name: string;
+  thumbnail_url: string | null;
   download_count: number;
   delta: number;
   snapshot_date: string;
@@ -247,12 +231,17 @@ export async function getSeriesWatchlistLatest(): Promise<SeriesWatchRow[]> {
   if (SERIES_WATCHLIST.length === 0) return [];
   const supabase = getSupabaseAnon();
   const productNos = SERIES_WATCHLIST.map((w) => w.productNo);
-  const { data, error } = await supabase
-    .from("series_snapshots")
-    .select("product_no,title_id,snapshot_date,download_count")
-    .in("product_no", productNos)
-    .order("snapshot_date", { ascending: false });
+  const titleIds = SERIES_WATCHLIST.map((w) => w.titleId);
+  const [{ data, error }, { data: titleRows, error: titleError }] = await Promise.all([
+    supabase
+      .from("series_snapshots")
+      .select("product_no,title_id,snapshot_date,download_count")
+      .in("product_no", productNos)
+      .order("snapshot_date", { ascending: false }),
+    supabase.from("titles").select("title_id,thumbnail_url").in("title_id", titleIds),
+  ]);
   if (error) throw error;
+  if (titleError) throw titleError;
 
   const byProduct = new Map<number, { snapshot_date: string; download_count: number }[]>();
   for (const row of data ?? []) {
@@ -260,6 +249,7 @@ export async function getSeriesWatchlistLatest(): Promise<SeriesWatchRow[]> {
     list.push({ snapshot_date: row.snapshot_date, download_count: row.download_count });
     byProduct.set(row.product_no, list);
   }
+  const thumbnailByTitle = new Map((titleRows ?? []).map((t) => [t.title_id, t.thumbnail_url as string | null]));
 
   return SERIES_WATCHLIST.map((w) => {
     const history = byProduct.get(w.productNo) ?? [];
@@ -269,6 +259,7 @@ export async function getSeriesWatchlistLatest(): Promise<SeriesWatchRow[]> {
       product_no: w.productNo,
       title_id: w.titleId,
       title_name: w.name,
+      thumbnail_url: thumbnailByTitle.get(w.titleId) ?? null,
       download_count: latest?.download_count ?? 0,
       delta: latest && prev ? latest.download_count - prev.download_count : 0,
       snapshot_date: latest?.snapshot_date ?? "",

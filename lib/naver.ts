@@ -177,13 +177,18 @@ interface RealtimeRankingResponse {
   femaleRankingTitleList: { rank: number; titleId: number }[];
 }
 
+export type RealtimeRankTabType = "DEFAULT" | "NEW";
+
 /**
  * 네이버 실시간 랭킹 - 요일 구분 없는 진짜 플랫폼 전체 순위 (전체/남성/여성).
+ * rankTabType=DEFAULT는 실시간 인기랭킹, NEW는 실시간 신작랭킹.
  * 다만 위젯 특성상 각 카테고리 TOP 5까지만 제공됨 (페이지네이션 파라미터 없음, 확인 완료).
  */
-export async function fetchRealtimeRanking(): Promise<Record<RealtimeRankCategory, RealtimeRankItem[]>> {
+export async function fetchRealtimeRanking(
+  rankTabType: RealtimeRankTabType = "DEFAULT"
+): Promise<Record<RealtimeRankCategory, RealtimeRankItem[]>> {
   const data = await fetchJsonWithRetry<RealtimeRankingResponse>(
-    `https://comic.naver.com/api/realtime/ranking/list?rankTabType=DEFAULT`,
+    `https://comic.naver.com/api/realtime/ranking/list?rankTabType=${rankTabType}`,
     { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
   );
   return {

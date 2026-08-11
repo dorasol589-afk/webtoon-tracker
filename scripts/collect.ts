@@ -127,21 +127,27 @@ async function main() {
     console.log(`  title_snapshots ${titleSnapshotRows.length}건 저장 완료`);
   }
 
-  console.log(`[3/7] 실시간 랭킹(전체/남성/여성 TOP5) 조회...`);
-  const realtimeRanking = await fetchRealtimeRanking();
+  console.log(`[3/7] 실시간 랭킹(인기/신작 × 전체/남성/여성 TOP5) 조회...`);
+  const [realtimeRanking, realtimeNewRanking] = await Promise.all([
+    fetchRealtimeRanking("DEFAULT"),
+    fetchRealtimeRanking("NEW"),
+  ]);
   if (supabase) {
-    const realtimeRows = (Object.entries(realtimeRanking) as [RealtimeRankCategory, { rank: number; titleId: number }[]][]).flatMap(
-      ([category, items]) =>
-        items.map((item) => ({
-          category,
-          rank: item.rank,
-          title_id: item.titleId,
-          snapshot_date: snapshotDate,
-        }))
-    );
+    const toRows = (rankTabType: "DEFAULT" | "NEW", ranking: Record<RealtimeRankCategory, { rank: number; titleId: number }[]>) =>
+      (Object.entries(ranking) as [RealtimeRankCategory, { rank: number; titleId: number }[]][]).flatMap(
+        ([category, items]) =>
+          items.map((item) => ({
+            rank_tab_type: rankTabType,
+            category,
+            rank: item.rank,
+            title_id: item.titleId,
+            snapshot_date: snapshotDate,
+          }))
+      );
+    const realtimeRows = [...toRows("DEFAULT", realtimeRanking), ...toRows("NEW", realtimeNewRanking)];
     const { error } = await supabase
       .from("realtime_ranking_snapshots")
-      .upsert(realtimeRows, { onConflict: "category,rank,snapshot_date" });
+      .upsert(realtimeRows, { onConflict: "rank_tab_type,category,rank,snapshot_date" });
     if (error) console.error("  realtime_ranking_snapshots upsert 실패:", error.message);
     console.log(`  realtime_ranking_snapshots ${realtimeRows.length}건 저장 완료`);
   }

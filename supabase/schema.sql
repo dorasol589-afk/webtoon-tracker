@@ -94,14 +94,19 @@ create index if not exists idx_series_snapshots_date
   on series_snapshots (snapshot_date);
 
 -- 네이버 실시간 랭킹(/api/realtime/ranking/list) - 요일 구분 없는 진짜 플랫폼 전체 순위.
+-- rank_tab_type: DEFAULT(실시간 인기랭킹) | NEW(실시간 신작랭킹).
 -- 다만 위젯 특성상 TOTAL/MALE/FEMALE 각각 TOP 5까지만 제공됨.
 create table if not exists realtime_ranking_snapshots (
+  rank_tab_type text not null default 'DEFAULT', -- DEFAULT | NEW
   category      text not null, -- TOTAL | MALE | FEMALE
   rank          integer not null,
   title_id      bigint not null references titles(title_id),
-  snapshot_date date not null,
-  primary key (category, rank, snapshot_date)
+  snapshot_date date not null
 );
+
+alter table realtime_ranking_snapshots add column if not exists rank_tab_type text not null default 'DEFAULT';
+alter table realtime_ranking_snapshots drop constraint if exists realtime_ranking_snapshots_pkey;
+alter table realtime_ranking_snapshots add primary key (rank_tab_type, category, rank, snapshot_date);
 
 create index if not exists idx_realtime_ranking_date
   on realtime_ranking_snapshots (snapshot_date);
@@ -238,38 +243,9 @@ as $$
   limit result_limit;
 $$;
 
--- 최근 launch_date(1화 등록일)가 days_back일 이내인 작품들을 인기순위(요일 내 순위)로 정렬.
--- 요일이 다르면 순위 숫자가 완전히 동일 기준은 아니지만(요일별로 리셋됨), 신작 풀이 작아 참고용으로는 충분함.
-create or replace function new_release_popularity_ranking(days_back int default 90, result_limit int default 30)
-returns table (
-  title_id bigint,
-  title_name text,
-  thumbnail_url text,
-  launch_date date,
-  popularity_rank integer,
-  weekday text
-)
-language sql
-stable
-as $$
-  with latest as (
-    select snapshot_date from title_snapshots order by snapshot_date desc limit 1
-  ),
-  launch as (
-    select title_id, min(service_date) as launch_date
-    from episodes
-    group by title_id
-  )
-  select ti.title_id, ti.title_name, ti.thumbnail_url, l.launch_date, ts.popularity_rank, ts.weekday
-  from launch l
-  join titles ti on ti.title_id = l.title_id
-  left join title_snapshots ts on ts.title_id = l.title_id and ts.snapshot_date = (select snapshot_date from latest)
-  where l.launch_date >= (current_date - days_back) and ti.is_active = true
-  order by ts.popularity_rank asc nulls last, l.launch_date desc
-  limit result_limit;
-$$;
+-- 신작 인기순위는 네이버 실시간 신작랭킹(realtime_ranking_snapshots, rank_tab_type='NEW')으로 대체되어 더 이상 사용하지 않음.
+drop function if exists new_release_popularity_ranking(int, int);
 
 grant execute on function latest_snapshot_date() to anon;
 grant execute on function top_movers(int) to anon;
 grant execute on function weekday_popularity_ranking(text, int) to anon;
-grant execute on function new_release_popularity_ranking(int, int) to anon;
