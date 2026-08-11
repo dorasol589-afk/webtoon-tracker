@@ -22,6 +22,9 @@ alter table titles add column if not exists studio_key text;
 alter table titles add column if not exists studio_name text;
 alter table titles add column if not exists studio_website_url text;
 
+-- 작품 소개 (네이버 article/list/info의 synopsis)
+alter table titles add column if not exists synopsis text;
+
 create table if not exists episodes (
   title_id         bigint not null references titles(title_id),
   no               integer not null,

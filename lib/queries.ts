@@ -11,6 +11,7 @@ export interface TitleRow {
   is_on_hiatus: boolean;
   studio_name: string | null;
   studio_website_url: string | null;
+  synopsis: string | null;
 }
 
 export interface EpisodeRow {
@@ -52,7 +53,7 @@ export async function searchTitles(query: string): Promise<TitleRow[]> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,studio_name,studio_website_url")
+    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,studio_name,studio_website_url,synopsis")
     .eq("is_active", true)
     .ilike("title_name", `%${query}%`)
     .order("title_name")
@@ -65,7 +66,7 @@ export async function getTitle(titleId: number): Promise<TitleRow | null> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,studio_name,studio_website_url")
+    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,studio_name,studio_website_url,synopsis")
     .eq("title_id", titleId)
     .maybeSingle();
   if (error) throw error;

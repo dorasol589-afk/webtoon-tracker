@@ -43,10 +43,10 @@ export default async function TitlePage({
 
   return (
     <div>
-      <div className="mb-6 flex items-center gap-4">
+      <div className="mb-6 flex items-start gap-4">
         {title.thumbnail_url && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={title.thumbnail_url} alt="" className="h-20 w-20 rounded-lg object-cover" />
+          <img src={title.thumbnail_url} alt="" className="w-28 shrink-0 rounded-lg" />
         )}
         <div>
           <h1 className="text-xl font-semibold">{title.title_name}</h1>
@@ -106,6 +106,11 @@ export default async function TitlePage({
                 </span>
               )}
             </div>
+          )}
+          {title.synopsis && (
+            <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-neutral-700">
+              {title.synopsis}
+            </p>
           )}
         </div>
       </div>
