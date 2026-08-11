@@ -116,6 +116,44 @@ export async function getEpisodeHistory(titleId: number, no: number): Promise<Sn
   return (data ?? []) as SnapshotPoint[];
 }
 
+export interface StarRankingRow {
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  star_score: number;
+}
+
+/** 평점 TOP N (네이버가 제공하지 않는 "전체 웹툰 랭킹"을 직접 계산) */
+export async function getOverallStarRanking(limit = 10): Promise<StarRankingRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("overall_star_ranking", { result_limit: limit });
+  if (error) throw error;
+  return (data ?? []) as StarRankingRow[];
+}
+
+export interface TitleSnapshot {
+  star_score: number | null;
+  weekday: string | null;
+  popularity_rank: number | null;
+  rating_rank: number | null;
+  view_rank: number | null;
+}
+
+/** 작품의 최신 평점/요일별 랭킹 (매일+ 작품은 rank가 전부 null일 수 있음) */
+export async function getLatestTitleSnapshot(titleId: number): Promise<TitleSnapshot | null> {
+  const supabase = getSupabaseAnon();
+  const latestDate = await getLatestSnapshotDate();
+  if (!latestDate) return null;
+  const { data, error } = await supabase
+    .from("title_snapshots")
+    .select("star_score,weekday,popularity_rank,rating_rank,view_rank")
+    .eq("title_id", titleId)
+    .eq("snapshot_date", latestDate)
+    .maybeSingle();
+  if (error) throw error;
+  return data as TitleSnapshot | null;
+}
+
 export async function getEpisode(titleId: number, no: number): Promise<EpisodeRow | null> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase

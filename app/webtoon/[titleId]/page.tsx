@@ -1,8 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getTitle, getEpisodesWithLatestCount } from "@/lib/queries";
+import { getTitle, getEpisodesWithLatestCount, getLatestTitleSnapshot } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
+
+const WEEKDAY_KO: Record<string, string> = {
+  MONDAY: "월",
+  TUESDAY: "화",
+  WEDNESDAY: "수",
+  THURSDAY: "목",
+  FRIDAY: "금",
+  SATURDAY: "토",
+  SUNDAY: "일",
+};
 
 export default async function TitlePage({
   params,
@@ -16,7 +26,10 @@ export default async function TitlePage({
   const title = await getTitle(id);
   if (!title) notFound();
 
-  const episodes = await getEpisodesWithLatestCount(id);
+  const [episodes, snapshot] = await Promise.all([
+    getEpisodesWithLatestCount(id),
+    getLatestTitleSnapshot(id),
+  ]);
 
   return (
     <div>
@@ -32,6 +45,30 @@ export default async function TitlePage({
             <span className="mt-1 inline-block rounded bg-neutral-200 px-2 py-0.5 text-xs text-neutral-600">
               현재 연재목록에서 제외됨 (완결 또는 휴재 가능)
             </span>
+          )}
+          {snapshot && (
+            <div className="mt-2 flex flex-wrap gap-2 text-xs">
+              {snapshot.star_score !== null && (
+                <span className="rounded bg-amber-100 px-2 py-1 text-amber-800">
+                  ★ {snapshot.star_score.toFixed(2)}
+                </span>
+              )}
+              {snapshot.weekday && snapshot.popularity_rank && (
+                <span className="rounded bg-blue-100 px-2 py-1 text-blue-800">
+                  {WEEKDAY_KO[snapshot.weekday] ?? snapshot.weekday}요일 인기 {snapshot.popularity_rank}위
+                </span>
+              )}
+              {snapshot.weekday && snapshot.rating_rank && (
+                <span className="rounded bg-purple-100 px-2 py-1 text-purple-800">
+                  별점 {snapshot.rating_rank}위
+                </span>
+              )}
+              {snapshot.weekday && snapshot.view_rank && (
+                <span className="rounded bg-teal-100 px-2 py-1 text-teal-800">
+                  조회 {snapshot.view_rank}위
+                </span>
+              )}
+            </div>
           )}
         </div>
       </div>

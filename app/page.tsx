@@ -1,5 +1,12 @@
 import Link from "next/link";
-import { getTopMovers, searchTitles, type TitleRow, type TopMoverRow } from "@/lib/queries";
+import {
+  getTopMovers,
+  searchTitles,
+  getOverallStarRanking,
+  type TitleRow,
+  type TopMoverRow,
+  type StarRankingRow,
+} from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -15,14 +22,15 @@ function DeltaBadge({ delta }: { delta: number }) {
 type LoadResult =
   | { type: "error" }
   | { type: "search"; titles: TitleRow[] }
-  | { type: "movers"; movers: TopMoverRow[] };
+  | { type: "movers"; movers: TopMoverRow[]; starRanking: StarRankingRow[] };
 
 async function loadData(q: string | undefined): Promise<LoadResult> {
   try {
     if (q) {
       return { type: "search", titles: await searchTitles(q) };
     }
-    return { type: "movers", movers: await getTopMovers(30) };
+    const [movers, starRanking] = await Promise.all([getTopMovers(30), getOverallStarRanking(10)]);
+    return { type: "movers", movers, starRanking };
   } catch {
     return { type: "error" };
   }
@@ -81,41 +89,64 @@ export default async function HomePage({
       )}
 
       {result.type === "movers" && (
-        <>
-          <h2 className="mb-3 text-sm font-semibold text-neutral-500">
-            오늘 댓글수가 가장 많이 늘어난 회차
-          </h2>
-          <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
-            {result.movers.length === 0 && (
-              <li className="p-4 text-sm text-neutral-500">
-                아직 수집된 데이터가 없습니다. 수집기가 최소 2회 이상 실행되면 순위가 표시됩니다.
-              </li>
-            )}
-            {result.movers.map((m, i) => (
-              <li key={`${m.title_id}-${m.no}`}>
-                <Link
-                  href={`/webtoon/${m.title_id}/${m.no}`}
-                  className="flex items-center gap-3 p-3 hover:bg-neutral-50"
-                >
-                  <span className="w-6 shrink-0 text-center text-sm text-neutral-400">{i + 1}</span>
-                  {m.thumbnail_url && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={m.thumbnail_url} alt="" className="h-14 w-14 rounded object-cover" />
-                  )}
-                  <div className="flex-1">
-                    <div className="font-medium">
-                      {m.title_name} <span className="text-neutral-400">· {m.subtitle}</span>
+        <div className="grid gap-8 md:grid-cols-[2fr_1fr]">
+          <div>
+            <h2 className="mb-3 text-sm font-semibold text-neutral-500">
+              오늘 댓글수가 가장 많이 늘어난 회차
+            </h2>
+            <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
+              {result.movers.length === 0 && (
+                <li className="p-4 text-sm text-neutral-500">
+                  아직 수집된 데이터가 없습니다. 수집기가 최소 2회 이상 실행되면 순위가 표시됩니다.
+                </li>
+              )}
+              {result.movers.map((m, i) => (
+                <li key={`${m.title_id}-${m.no}`}>
+                  <Link
+                    href={`/webtoon/${m.title_id}/${m.no}`}
+                    className="flex items-center gap-3 p-3 hover:bg-neutral-50"
+                  >
+                    <span className="w-6 shrink-0 text-center text-sm text-neutral-400">{i + 1}</span>
+                    {m.thumbnail_url && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={m.thumbnail_url} alt="" className="h-14 w-14 rounded object-cover" />
+                    )}
+                    <div className="flex-1">
+                      <div className="font-medium">
+                        {m.title_name} <span className="text-neutral-400">· {m.subtitle}</span>
+                      </div>
+                      <div className="text-sm text-neutral-500">
+                        댓글 {m.comment_count.toLocaleString()}개
+                        <DeltaBadge delta={m.delta} />
+                      </div>
                     </div>
-                    <div className="text-sm text-neutral-500">
-                      댓글 {m.comment_count.toLocaleString()}개
-                      <DeltaBadge delta={m.delta} />
-                    </div>
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ol>
-        </>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          <div>
+            <h2 className="mb-3 text-sm font-semibold text-neutral-500">평점 TOP 10</h2>
+            <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
+              {result.starRanking.length === 0 && (
+                <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
+              )}
+              {result.starRanking.map((s, i) => (
+                <li key={s.title_id}>
+                  <Link
+                    href={`/webtoon/${s.title_id}`}
+                    className="flex items-center gap-2 p-2.5 hover:bg-neutral-50"
+                  >
+                    <span className="w-5 shrink-0 text-center text-xs text-neutral-400">{i + 1}</span>
+                    <span className="flex-1 truncate text-sm font-medium">{s.title_name}</span>
+                    <span className="shrink-0 text-xs text-amber-700">★ {s.star_score.toFixed(2)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
       )}
     </div>
   );
