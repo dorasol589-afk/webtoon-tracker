@@ -37,21 +37,47 @@ create index if not exists idx_comment_snapshots_lookup
 create index if not exists idx_comment_snapshots_date
   on comment_snapshots (snapshot_date);
 
+-- 작품 단위 일일 지표: 평점, 요일별 랭킹(인기순/별점순/조회순).
+-- 랭킹은 네이버가 해당 요일 안에서만 제공하므로(플랫폼 전체 단일 랭킹 없음) weekday별 순위로 저장.
+-- 매일+(dailyPlus) 작품은 이 랭킹 API 자체에 포함되지 않아 rank 값들이 NULL일 수 있음.
+create table if not exists title_snapshots (
+  title_id         bigint not null references titles(title_id),
+  snapshot_date    date not null,
+  star_score       numeric,
+  weekday          text,
+  popularity_rank  integer,
+  rating_rank      integer,
+  view_rank        integer,
+  primary key (title_id, snapshot_date)
+);
+
+create index if not exists idx_title_snapshots_date
+  on title_snapshots (snapshot_date);
+
 -- Row Level Security: 읽기는 누구나(anon), 쓰기는 service role만 가능
 alter table titles enable row level security;
 alter table episodes enable row level security;
 alter table comment_snapshots enable row level security;
+alter table title_snapshots enable row level security;
 
+drop policy if exists "titles are publicly readable" on titles;
 create policy "titles are publicly readable"
   on titles for select
   using (true);
 
+drop policy if exists "episodes are publicly readable" on episodes;
 create policy "episodes are publicly readable"
   on episodes for select
   using (true);
 
+drop policy if exists "comment_snapshots are publicly readable" on comment_snapshots;
 create policy "comment_snapshots are publicly readable"
   on comment_snapshots for select
+  using (true);
+
+drop policy if exists "title_snapshots are publicly readable" on title_snapshots;
+create policy "title_snapshots are publicly readable"
+  on title_snapshots for select
   using (true);
 
 -- service_role 키는 RLS를 우회하므로 쓰기용 정책은 별도로 필요 없음 (수집기는 service role key 사용)
@@ -117,5 +143,29 @@ as $$
   limit result_limit;
 $$;
 
+-- 네이버가 제공하지 않는 "전체 웹툰 랭킹"을 우리가 수집한 평점으로 직접 구성
+create or replace function overall_star_ranking(result_limit int default 50)
+returns table (
+  title_id bigint,
+  title_name text,
+  thumbnail_url text,
+  star_score numeric
+)
+language sql
+stable
+as $$
+  with latest as (
+    select snapshot_date from title_snapshots order by snapshot_date desc limit 1
+  )
+  select ts.title_id, ti.title_name, ti.thumbnail_url, ts.star_score
+  from title_snapshots ts
+  join latest on ts.snapshot_date = latest.snapshot_date
+  join titles ti on ti.title_id = ts.title_id
+  where ts.star_score is not null and ti.is_active = true
+  order by ts.star_score desc
+  limit result_limit;
+$$;
+
 grant execute on function latest_snapshot_date() to anon;
 grant execute on function top_movers(int) to anon;
+grant execute on function overall_star_ranking(int) to anon;

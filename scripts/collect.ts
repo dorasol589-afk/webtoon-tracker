@@ -8,7 +8,12 @@ import pLimit from "p-limit";
 // 로컬 개발 시 .env.local을 우선 사용 (Next.js 관례). GitHub Actions 등 CI에서는 파일이 없어도 무시됨.
 loadEnv({ path: ".env.local" });
 loadEnv();
-import { fetchAllOngoingTitles, fetchAllEpisodes, fetchCommentStats } from "../lib/naver";
+import {
+  fetchAllOngoingTitles,
+  fetchAllEpisodes,
+  fetchCommentStats,
+  fetchWeekdayRankMap,
+} from "../lib/naver";
 
 function getKstDateString(): string {
   const now = new Date();
@@ -84,7 +89,36 @@ async function main() {
     console.log("  (SUPABASE_URL/SERVICE_ROLE_KEY 미설정 - 드라이런 모드, DB에 쓰지 않음)");
   }
 
-  console.log(`[2/4] 작품별 회차 목록 조회 및 무료회차 판별...`);
+  console.log(`[2/5] 평점/요일별 랭킹(인기순·별점순·조회순) 조회...`);
+  // 매일+(dailyPlus) 작품은 이 랭킹 API에 없어 rank가 비어있을 수 있음 (star_score는 titles에서 그대로 나옴)
+  const [popularityRanks, ratingRanks, viewRanks] = await Promise.all([
+    fetchWeekdayRankMap("user"),
+    fetchWeekdayRankMap("star"),
+    fetchWeekdayRankMap("view"),
+  ]);
+  if (supabase) {
+    const titleSnapshotRows = titles.map((t) => {
+      const rankInfo = popularityRanks.get(t.titleId) ?? ratingRanks.get(t.titleId) ?? viewRanks.get(t.titleId);
+      return {
+        title_id: t.titleId,
+        snapshot_date: snapshotDate,
+        star_score: t.starScore,
+        weekday: rankInfo?.weekday ?? null,
+        popularity_rank: popularityRanks.get(t.titleId)?.rank ?? null,
+        rating_rank: ratingRanks.get(t.titleId)?.rank ?? null,
+        view_rank: viewRanks.get(t.titleId)?.rank ?? null,
+      };
+    });
+    for (const batch of chunk(titleSnapshotRows, 500)) {
+      const { error } = await supabase
+        .from("title_snapshots")
+        .upsert(batch, { onConflict: "title_id,snapshot_date" });
+      if (error) console.error("  title_snapshots upsert 실패:", error.message);
+    }
+    console.log(`  title_snapshots ${titleSnapshotRows.length}건 저장 완료`);
+  }
+
+  console.log(`[3/5] 작품별 회차 목록 조회 및 무료회차 판별...`);
   const episodeLimit = pLimit(5);
   const freeEpisodes: { titleId: number; titleName: string; no: number }[] = [];
   let totalEpisodeCount = 0;
@@ -134,7 +168,7 @@ async function main() {
       `(중복 ${freeEpisodes.length - dedupedFreeEpisodes.length}건 제거, 회차조회 실패 ${episodeFetchFailures}건)`
   );
 
-  console.log(`[3/4] 무료회차 댓글수 수집...`);
+  console.log(`[4/5] 무료회차 댓글수 수집...`);
   const commentLimit = pLimit(15);
   let commentFailures = 0;
   const snapshots: {
@@ -167,7 +201,7 @@ async function main() {
   const dedupedSnapshots = dedupeBy(snapshots, (s) => `${s.title_id}_${s.no}`);
   console.log(`  댓글수 수집 완료: 성공 ${dedupedSnapshots.length}건, 실패 ${commentFailures}건`);
 
-  console.log(`[4/4] 결과 저장...`);
+  console.log(`[5/5] 결과 저장...`);
   if (supabase) {
     for (const batch of chunk(dedupedSnapshots, 500)) {
       const { error } = await supabase

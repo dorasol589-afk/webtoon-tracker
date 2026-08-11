@@ -13,6 +13,14 @@ export interface TitleListItem {
   author: string;
   thumbnailUrl: string;
   finish: boolean;
+  starScore: number;
+}
+
+export type RankOrder = "user" | "star" | "view";
+
+export interface RankInfo {
+  weekday: string;
+  rank: number;
 }
 
 export interface EpisodeListItem {
@@ -74,6 +82,25 @@ export async function fetchAllOngoingTitles(): Promise<TitleListItem[]> {
     }
   }
   return [...byId.values()];
+}
+
+/**
+ * 요일별 랭킹 (order=user: 인기순, order=star: 별점순, order=view: 조회순).
+ * 응답이 {weekday: [...]} 형태의 맵으로 오며, 배열 내 순서가 곧 해당 요일 안에서의 순위.
+ * 요일 그룹 안에서만 유효한 순위이며, 네이버가 플랫폼 전체를 아우르는 단일 랭킹은 제공하지 않음.
+ */
+export async function fetchWeekdayRankMap(order: RankOrder): Promise<Map<number, RankInfo>> {
+  const data = await fetchJsonWithRetry<{ titleListMap: Record<string, TitleListItem[]> }>(
+    `https://comic.naver.com/api/webtoon/titlelist/weekday?order=${order}`,
+    { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
+  );
+  const result = new Map<number, RankInfo>();
+  for (const [weekday, titles] of Object.entries(data.titleListMap)) {
+    titles.forEach((t, i) => {
+      result.set(t.titleId, { weekday, rank: i + 1 });
+    });
+  }
+  return result;
 }
 
 interface ArticleListResponse {
