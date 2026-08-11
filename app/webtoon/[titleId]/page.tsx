@@ -108,9 +108,14 @@ export default async function TitlePage({
             </div>
           )}
           {title.synopsis && (
-            <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-neutral-700">
-              {title.synopsis}
-            </p>
+            <details className="mt-3">
+              <summary className="cursor-pointer text-sm text-blue-600 hover:underline">
+                작품소개 보기
+              </summary>
+              <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-neutral-700">
+                {title.synopsis}
+              </p>
+            </details>
           )}
         </div>
       </div>
