@@ -1,4 +1,5 @@
 import { getSupabaseAnon } from "./supabase";
+import { SERIES_WATCHLIST } from "./seriesWatchlist";
 
 export interface TitleRow {
   title_id: number;
@@ -152,6 +153,66 @@ export async function getLatestTitleSnapshot(titleId: number): Promise<TitleSnap
     .maybeSingle();
   if (error) throw error;
   return data as TitleSnapshot | null;
+}
+
+export interface SeriesWatchRow {
+  product_no: number;
+  title_id: number;
+  title_name: string;
+  download_count: number;
+  delta: number;
+  snapshot_date: string;
+}
+
+/** 우선 추적 작품(lib/seriesWatchlist.ts)의 최신 시리즈 다운로드수 + 전일 대비 증가량 */
+export async function getSeriesWatchlistLatest(): Promise<SeriesWatchRow[]> {
+  if (SERIES_WATCHLIST.length === 0) return [];
+  const supabase = getSupabaseAnon();
+  const productNos = SERIES_WATCHLIST.map((w) => w.productNo);
+  const { data, error } = await supabase
+    .from("series_snapshots")
+    .select("product_no,title_id,snapshot_date,download_count")
+    .in("product_no", productNos)
+    .order("snapshot_date", { ascending: false });
+  if (error) throw error;
+
+  const byProduct = new Map<number, { snapshot_date: string; download_count: number }[]>();
+  for (const row of data ?? []) {
+    const list = byProduct.get(row.product_no) ?? [];
+    list.push({ snapshot_date: row.snapshot_date, download_count: row.download_count });
+    byProduct.set(row.product_no, list);
+  }
+
+  return SERIES_WATCHLIST.map((w) => {
+    const history = byProduct.get(w.productNo) ?? [];
+    const latest = history[0];
+    const prev = history[1];
+    return {
+      product_no: w.productNo,
+      title_id: w.titleId,
+      title_name: w.name,
+      download_count: latest?.download_count ?? 0,
+      delta: latest && prev ? latest.download_count - prev.download_count : 0,
+      snapshot_date: latest?.snapshot_date ?? "",
+    };
+  }).sort((a, b) => b.download_count - a.download_count);
+}
+
+export interface SeriesSnapshotPoint {
+  snapshot_date: string;
+  download_count: number;
+}
+
+/** 특정 시리즈 작품의 날짜별 다운로드수 추이 */
+export async function getSeriesHistory(productNo: number): Promise<SeriesSnapshotPoint[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("series_snapshots")
+    .select("snapshot_date,download_count")
+    .eq("product_no", productNo)
+    .order("snapshot_date", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as SeriesSnapshotPoint[];
 }
 
 export async function getEpisode(titleId: number, no: number): Promise<EpisodeRow | null> {

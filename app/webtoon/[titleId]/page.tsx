@@ -1,6 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getTitle, getEpisodesWithLatestCount, getLatestTitleSnapshot } from "@/lib/queries";
+import {
+  getTitle,
+  getEpisodesWithLatestCount,
+  getLatestTitleSnapshot,
+  getSeriesHistory,
+} from "@/lib/queries";
+import { SERIES_WATCHLIST } from "@/lib/seriesWatchlist";
+import SeriesDownloadChart from "./SeriesDownloadChart";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +33,12 @@ export default async function TitlePage({
   const title = await getTitle(id);
   if (!title) notFound();
 
-  const [episodes, snapshot] = await Promise.all([
+  const seriesWatch = SERIES_WATCHLIST.find((w) => w.titleId === id);
+
+  const [episodes, snapshot, seriesHistory] = await Promise.all([
     getEpisodesWithLatestCount(id),
     getLatestTitleSnapshot(id),
+    seriesWatch ? getSeriesHistory(seriesWatch.productNo) : Promise.resolve([]),
   ]);
 
   return (
@@ -72,6 +82,20 @@ export default async function TitlePage({
           )}
         </div>
       </div>
+
+      {seriesWatch && (
+        <div className="mb-6">
+          <h2 className="mb-2 text-sm font-semibold text-neutral-500">
+            네이버 시리즈 누적 다운로드수
+            {seriesHistory.length > 0 && (
+              <span className="ml-2 text-neutral-800">
+                {seriesHistory[seriesHistory.length - 1].download_count.toLocaleString()}
+              </span>
+            )}
+          </h2>
+          <SeriesDownloadChart data={seriesHistory} />
+        </div>
+      )}
 
       <table className="w-full border-collapse overflow-hidden rounded-lg border border-neutral-200 bg-white text-sm">
         <thead className="bg-neutral-100 text-left text-neutral-500">

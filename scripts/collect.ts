@@ -80,13 +80,16 @@ async function main() {
       if (error) console.error("  titles upsert 실패:", error.message);
     }
 
-    const currentIds = titles.map((t) => t.titleId);
-    const { error: deactivateError } = await supabase
-      .from("titles")
-      .update({ is_active: false })
-      .eq("is_active", true)
-      .not("title_id", "in", `(${currentIds.join(",") || 0})`);
-    if (deactivateError) console.error("  titles 비활성화 실패:", deactivateError.message);
+    // TITLE_LIMIT으로 일부만 처리한 경우, 나머지 전체를 비활성 처리해버리는 사고를 방지
+    if (!titleLimit) {
+      const currentIds = titles.map((t) => t.titleId);
+      const { error: deactivateError } = await supabase
+        .from("titles")
+        .update({ is_active: false })
+        .eq("is_active", true)
+        .not("title_id", "in", `(${currentIds.join(",") || 0})`);
+      if (deactivateError) console.error("  titles 비활성화 실패:", deactivateError.message);
+    }
   } else {
     console.log("  (SUPABASE_URL/SERVICE_ROLE_KEY 미설정 - 드라이런 모드, DB에 쓰지 않음)");
   }

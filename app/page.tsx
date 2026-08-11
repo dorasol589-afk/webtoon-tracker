@@ -3,9 +3,11 @@ import {
   getTopMovers,
   searchTitles,
   getOverallStarRanking,
+  getSeriesWatchlistLatest,
   type TitleRow,
   type TopMoverRow,
   type StarRankingRow,
+  type SeriesWatchRow,
 } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -22,15 +24,24 @@ function DeltaBadge({ delta }: { delta: number }) {
 type LoadResult =
   | { type: "error" }
   | { type: "search"; titles: TitleRow[] }
-  | { type: "movers"; movers: TopMoverRow[]; starRanking: StarRankingRow[] };
+  | {
+      type: "movers";
+      movers: TopMoverRow[];
+      starRanking: StarRankingRow[];
+      seriesWatch: SeriesWatchRow[];
+    };
 
 async function loadData(q: string | undefined): Promise<LoadResult> {
   try {
     if (q) {
       return { type: "search", titles: await searchTitles(q) };
     }
-    const [movers, starRanking] = await Promise.all([getTopMovers(30), getOverallStarRanking(10)]);
-    return { type: "movers", movers, starRanking };
+    const [movers, starRanking, seriesWatch] = await Promise.all([
+      getTopMovers(30),
+      getOverallStarRanking(10),
+      getSeriesWatchlistLatest(),
+    ]);
+    return { type: "movers", movers, starRanking, seriesWatch };
   } catch {
     return { type: "error" };
   }
@@ -141,6 +152,29 @@ export default async function HomePage({
                     <span className="w-5 shrink-0 text-center text-xs text-neutral-400">{i + 1}</span>
                     <span className="flex-1 truncate text-sm font-medium">{s.title_name}</span>
                     <span className="shrink-0 text-xs text-amber-700">★ {s.star_score.toFixed(2)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+
+            <h2 className="mb-3 mt-8 text-sm font-semibold text-neutral-500">
+              네이버 시리즈 다운로드수 (우선 추적)
+            </h2>
+            <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
+              {result.seriesWatch.length === 0 && (
+                <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
+              )}
+              {result.seriesWatch.map((s) => (
+                <li key={s.product_no}>
+                  <Link
+                    href={`/webtoon/${s.title_id}`}
+                    className="flex items-center justify-between gap-2 p-2.5 hover:bg-neutral-50"
+                  >
+                    <span className="flex-1 truncate text-sm font-medium">{s.title_name}</span>
+                    <span className="shrink-0 text-xs text-neutral-600">
+                      {s.download_count.toLocaleString()}
+                      <DeltaBadge delta={s.delta} />
+                    </span>
                   </Link>
                 </li>
               ))}
