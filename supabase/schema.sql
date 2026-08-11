@@ -93,6 +93,19 @@ create table if not exists series_snapshots (
 create index if not exists idx_series_snapshots_date
   on series_snapshots (snapshot_date);
 
+-- 네이버 실시간 랭킹(/api/realtime/ranking/list) - 요일 구분 없는 진짜 플랫폼 전체 순위.
+-- 다만 위젯 특성상 TOTAL/MALE/FEMALE 각각 TOP 5까지만 제공됨.
+create table if not exists realtime_ranking_snapshots (
+  category      text not null, -- TOTAL | MALE | FEMALE
+  rank          integer not null,
+  title_id      bigint not null references titles(title_id),
+  snapshot_date date not null,
+  primary key (category, rank, snapshot_date)
+);
+
+create index if not exists idx_realtime_ranking_date
+  on realtime_ranking_snapshots (snapshot_date);
+
 -- Row Level Security: 읽기는 누구나(anon), 쓰기는 service role만 가능
 alter table titles enable row level security;
 alter table episodes enable row level security;
@@ -100,6 +113,7 @@ alter table comment_snapshots enable row level security;
 alter table title_snapshots enable row level security;
 alter table series_snapshots enable row level security;
 alter table series_products enable row level security;
+alter table realtime_ranking_snapshots enable row level security;
 
 drop policy if exists "titles are publicly readable" on titles;
 create policy "titles are publicly readable"
@@ -129,6 +143,11 @@ create policy "series_snapshots are publicly readable"
 drop policy if exists "series_products are publicly readable" on series_products;
 create policy "series_products are publicly readable"
   on series_products for select
+  using (true);
+
+drop policy if exists "realtime_ranking_snapshots are publicly readable" on realtime_ranking_snapshots;
+create policy "realtime_ranking_snapshots are publicly readable"
+  on realtime_ranking_snapshots for select
   using (true);
 
 -- service_role 키는 RLS를 우회하므로 쓰기용 정책은 별도로 필요 없음 (수집기는 service role key 사용)

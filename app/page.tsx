@@ -5,13 +5,26 @@ import {
   getSeriesWatchlistLatest,
   getWeekdayPopularityRanking,
   getNewReleasePopularityRanking,
+  getRealtimeRanking,
   type TitleRow,
   type TopMoverRow,
   type SeriesWatchRow,
   type PopularityRankRow,
   type NewReleaseRankRow,
   type Weekday,
+  type RealtimeRankRow,
+  type RealtimeRankCategory,
 } from "@/lib/queries";
+
+const GENDER_TABS: { value: RealtimeRankCategory; label: string }[] = [
+  { value: "TOTAL", label: "전체" },
+  { value: "MALE", label: "남성" },
+  { value: "FEMALE", label: "여성" },
+];
+
+function isGenderCategory(value: string): value is RealtimeRankCategory {
+  return GENDER_TABS.some((g) => g.value === value);
+}
 
 export const dynamic = "force-dynamic";
 
@@ -60,25 +73,42 @@ type LoadResult =
   | {
       type: "movers";
       movers: TopMoverRow[];
+      realtimeRanking: RealtimeRankRow[];
+      selectedGender: RealtimeRankCategory;
       weekdayRanking: PopularityRankRow[];
       selectedWeekday: Weekday;
       newReleaseRanking: NewReleaseRankRow[];
       seriesWatch: SeriesWatchRow[];
     };
 
-async function loadData(q: string | undefined, weekdayParam: string | undefined): Promise<LoadResult> {
+async function loadData(
+  q: string | undefined,
+  weekdayParam: string | undefined,
+  genderParam: string | undefined
+): Promise<LoadResult> {
   try {
     if (q) {
       return { type: "search", titles: await searchTitles(q) };
     }
     const selectedWeekday = weekdayParam && isWeekday(weekdayParam) ? weekdayParam : getTodayWeekdayKST();
-    const [movers, weekdayRanking, newReleaseRanking, seriesWatch] = await Promise.all([
+    const selectedGender = genderParam && isGenderCategory(genderParam) ? genderParam : "TOTAL";
+    const [movers, realtimeRanking, weekdayRanking, newReleaseRanking, seriesWatch] = await Promise.all([
       getTopMovers(30),
+      getRealtimeRanking(selectedGender),
       getWeekdayPopularityRanking(selectedWeekday, 15),
       getNewReleasePopularityRanking(90, 15),
       getSeriesWatchlistLatest(),
     ]);
-    return { type: "movers", movers, weekdayRanking, selectedWeekday, newReleaseRanking, seriesWatch };
+    return {
+      type: "movers",
+      movers,
+      realtimeRanking,
+      selectedGender,
+      weekdayRanking,
+      selectedWeekday,
+      newReleaseRanking,
+      seriesWatch,
+    };
   } catch {
     return { type: "error" };
   }
@@ -87,10 +117,10 @@ async function loadData(q: string | undefined, weekdayParam: string | undefined)
 export default async function HomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; weekday?: string }>;
+  searchParams: Promise<{ q?: string; weekday?: string; gender?: string }>;
 }) {
-  const { q, weekday } = await searchParams;
-  const result = await loadData(q, weekday);
+  const { q, weekday, gender } = await searchParams;
+  const result = await loadData(q, weekday, gender);
 
   return (
     <div>
@@ -176,12 +206,49 @@ export default async function HomePage({
 
           <div>
             <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-neutral-500">
+                실시간 전체 랭킹 TOP5
+              </h2>
+              <div className="flex gap-1">
+                {GENDER_TABS.map((g) => (
+                  <Link
+                    key={g.value}
+                    href={`/?gender=${g.value}&weekday=${result.selectedWeekday}`}
+                    className={`rounded px-1.5 py-0.5 text-xs ${
+                      g.value === result.selectedGender
+                        ? "bg-neutral-800 text-white"
+                        : "text-neutral-500 hover:bg-neutral-100"
+                    }`}
+                  >
+                    {g.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
+            <ol className="mb-8 divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
+              {result.realtimeRanking.length === 0 && (
+                <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
+              )}
+              {result.realtimeRanking.map((r) => (
+                <li key={r.title_id}>
+                  <Link
+                    href={`/webtoon/${r.title_id}`}
+                    className="flex items-center gap-2 p-2.5 hover:bg-neutral-50"
+                  >
+                    <span className="w-5 shrink-0 text-center text-xs text-neutral-400">{r.rank}</span>
+                    <span className="flex-1 truncate text-sm font-medium">{r.title_name}</span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+
+            <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-neutral-500">요일별 인기순위</h2>
               <div className="flex gap-1">
                 {WEEKDAYS.map((w) => (
                   <Link
                     key={w.value}
-                    href={`/?weekday=${w.value}`}
+                    href={`/?weekday=${w.value}&gender=${result.selectedGender}`}
                     className={`rounded px-1.5 py-0.5 text-xs ${
                       w.value === result.selectedWeekday
                         ? "bg-neutral-800 text-white"

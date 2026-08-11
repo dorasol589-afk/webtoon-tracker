@@ -176,6 +176,40 @@ export async function getNewReleasePopularityRanking(
   return (data ?? []) as NewReleaseRankRow[];
 }
 
+export type RealtimeRankCategory = "TOTAL" | "MALE" | "FEMALE";
+
+export interface RealtimeRankRow {
+  rank: number;
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+}
+
+/** 네이버 실시간 랭킹 TOP5 (요일 구분 없는 진짜 플랫폼 전체 순위, 전체/남성/여성) */
+export async function getRealtimeRanking(
+  category: RealtimeRankCategory
+): Promise<RealtimeRankRow[]> {
+  const supabase = getSupabaseAnon();
+  const latestDate = await getLatestSnapshotDate();
+  if (!latestDate) return [];
+  const { data, error } = await supabase
+    .from("realtime_ranking_snapshots")
+    .select("rank,title_id,titles(title_name,thumbnail_url)")
+    .eq("category", category)
+    .eq("snapshot_date", latestDate)
+    .order("rank", { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((r) => {
+    const title = Array.isArray(r.titles) ? r.titles[0] : r.titles;
+    return {
+      rank: r.rank,
+      title_id: r.title_id,
+      title_name: title?.title_name ?? "",
+      thumbnail_url: title?.thumbnail_url ?? null,
+    };
+  });
+}
+
 export interface TitleSnapshot {
   star_score: number | null;
   weekday: string | null;

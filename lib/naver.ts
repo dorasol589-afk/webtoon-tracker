@@ -36,6 +36,13 @@ export interface CommentStats {
   postCount: number;
 }
 
+export type RealtimeRankCategory = "TOTAL" | "MALE" | "FEMALE";
+
+export interface RealtimeRankItem {
+  rank: number;
+  titleId: number;
+}
+
 async function fetchJsonWithRetry<T>(
   url: string,
   init: RequestInit,
@@ -162,6 +169,28 @@ export async function fetchWeekdayRankMap(order: RankOrder): Promise<Map<number,
     result.set(t.titleId, { weekday: "DAILY_PLUS", rank: i + 1 });
   });
   return result;
+}
+
+interface RealtimeRankingResponse {
+  totalRankingTitleList: { rank: number; titleId: number }[];
+  maleRankingTitleList: { rank: number; titleId: number }[];
+  femaleRankingTitleList: { rank: number; titleId: number }[];
+}
+
+/**
+ * 네이버 실시간 랭킹 - 요일 구분 없는 진짜 플랫폼 전체 순위 (전체/남성/여성).
+ * 다만 위젯 특성상 각 카테고리 TOP 5까지만 제공됨 (페이지네이션 파라미터 없음, 확인 완료).
+ */
+export async function fetchRealtimeRanking(): Promise<Record<RealtimeRankCategory, RealtimeRankItem[]>> {
+  const data = await fetchJsonWithRetry<RealtimeRankingResponse>(
+    `https://comic.naver.com/api/realtime/ranking/list?rankTabType=DEFAULT`,
+    { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
+  );
+  return {
+    TOTAL: data.totalRankingTitleList.map((t) => ({ rank: t.rank, titleId: t.titleId })),
+    MALE: data.maleRankingTitleList.map((t) => ({ rank: t.rank, titleId: t.titleId })),
+    FEMALE: data.femaleRankingTitleList.map((t) => ({ rank: t.rank, titleId: t.titleId })),
+  };
 }
 
 interface ArticleListResponse {

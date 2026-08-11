@@ -14,6 +14,8 @@ import {
   fetchCommentStats,
   fetchWeekdayRankMap,
   fetchSeriesDownloadCount,
+  fetchRealtimeRanking,
+  type RealtimeRankCategory,
 } from "../lib/naver";
 import { SERIES_WATCHLIST } from "../lib/seriesWatchlist";
 
@@ -54,7 +56,7 @@ async function main() {
   const hasDb = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
   const snapshotDate = getKstDateString();
 
-  console.log(`[1/6] 연재중인 작품 목록 조회...`);
+  console.log(`[1/7] 연재중인 작품 목록 조회...`);
   const allTitles = await fetchAllOngoingTitles();
   const titles = titleLimit ? allTitles.slice(0, titleLimit) : allTitles;
   console.log(
@@ -96,7 +98,7 @@ async function main() {
     console.log("  (SUPABASE_URL/SERVICE_ROLE_KEY 미설정 - 드라이런 모드, DB에 쓰지 않음)");
   }
 
-  console.log(`[2/6] 평점/요일별 랭킹(인기순·별점순·조회순) 조회...`);
+  console.log(`[2/7] 평점/요일별 랭킹(인기순·별점순·조회순) 조회...`);
   // 매일+(dailyPlus) 작품은 이 랭킹 API에 없어 rank가 비어있을 수 있음 (star_score는 titles에서 그대로 나옴)
   const [popularityRanks, ratingRanks, viewRanks] = await Promise.all([
     fetchWeekdayRankMap("user"),
@@ -125,7 +127,26 @@ async function main() {
     console.log(`  title_snapshots ${titleSnapshotRows.length}건 저장 완료`);
   }
 
-  console.log(`[3/6] 작품별 회차 목록 조회 및 무료회차 판별...`);
+  console.log(`[3/7] 실시간 랭킹(전체/남성/여성 TOP5) 조회...`);
+  const realtimeRanking = await fetchRealtimeRanking();
+  if (supabase) {
+    const realtimeRows = (Object.entries(realtimeRanking) as [RealtimeRankCategory, { rank: number; titleId: number }[]][]).flatMap(
+      ([category, items]) =>
+        items.map((item) => ({
+          category,
+          rank: item.rank,
+          title_id: item.titleId,
+          snapshot_date: snapshotDate,
+        }))
+    );
+    const { error } = await supabase
+      .from("realtime_ranking_snapshots")
+      .upsert(realtimeRows, { onConflict: "category,rank,snapshot_date" });
+    if (error) console.error("  realtime_ranking_snapshots upsert 실패:", error.message);
+    console.log(`  realtime_ranking_snapshots ${realtimeRows.length}건 저장 완료`);
+  }
+
+  console.log(`[4/7] 작품별 회차 목록 조회 및 무료회차 판별...`);
   const episodeLimit = pLimit(5);
   const freeEpisodes: { titleId: number; titleName: string; no: number }[] = [];
   let totalEpisodeCount = 0;
@@ -175,7 +196,7 @@ async function main() {
       `(중복 ${freeEpisodes.length - dedupedFreeEpisodes.length}건 제거, 회차조회 실패 ${episodeFetchFailures}건)`
   );
 
-  console.log(`[4/6] 무료회차 댓글수 수집...`);
+  console.log(`[5/7] 무료회차 댓글수 수집...`);
   const commentLimit = pLimit(15);
   let commentFailures = 0;
   const snapshots: {
@@ -208,7 +229,7 @@ async function main() {
   const dedupedSnapshots = dedupeBy(snapshots, (s) => `${s.title_id}_${s.no}`);
   console.log(`  댓글수 수집 완료: 성공 ${dedupedSnapshots.length}건, 실패 ${commentFailures}건`);
 
-  console.log(`[5/6] 결과 저장...`);
+  console.log(`[6/7] 결과 저장...`);
   if (supabase) {
     for (const batch of chunk(dedupedSnapshots, 500)) {
       const { error } = await supabase
@@ -228,7 +249,7 @@ async function main() {
     }
   }
 
-  console.log(`[6/6] 네이버 시리즈 다운로드수 수집 (우선 추적 5개 + 매칭된 전체)...`);
+  console.log(`[7/7] 네이버 시리즈 다운로드수 수집 (우선 추적 5개 + 매칭된 전체)...`);
   const seriesTargets = new Map<number, { titleId: number; name: string }>();
   for (const item of SERIES_WATCHLIST) {
     seriesTargets.set(item.productNo, { titleId: item.titleId, name: item.name });
