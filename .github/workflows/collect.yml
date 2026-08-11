@@ -2,8 +2,8 @@ name: 댓글수 일일 수집
 
 on:
   schedule:
-    # 매일 15:00 UTC = 00:00 KST
-    - cron: "0 15 * * *"
+    # 매일 18:00 UTC = 03:00 KST
+    - cron: "0 18 * * *"
   workflow_dispatch: {}
 
 jobs:

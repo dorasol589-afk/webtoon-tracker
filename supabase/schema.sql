@@ -54,11 +54,24 @@ create table if not exists title_snapshots (
 create index if not exists idx_title_snapshots_date
   on title_snapshots (snapshot_date);
 
+-- 우선 추적 작품의 네이버 시리즈 누적 다운로드수 (lib/seriesWatchlist.ts 참고)
+create table if not exists series_snapshots (
+  product_no    bigint not null,
+  title_id      bigint references titles(title_id),
+  snapshot_date date not null,
+  download_count bigint not null,
+  primary key (product_no, snapshot_date)
+);
+
+create index if not exists idx_series_snapshots_date
+  on series_snapshots (snapshot_date);
+
 -- Row Level Security: 읽기는 누구나(anon), 쓰기는 service role만 가능
 alter table titles enable row level security;
 alter table episodes enable row level security;
 alter table comment_snapshots enable row level security;
 alter table title_snapshots enable row level security;
+alter table series_snapshots enable row level security;
 
 drop policy if exists "titles are publicly readable" on titles;
 create policy "titles are publicly readable"
@@ -78,6 +91,11 @@ create policy "comment_snapshots are publicly readable"
 drop policy if exists "title_snapshots are publicly readable" on title_snapshots;
 create policy "title_snapshots are publicly readable"
   on title_snapshots for select
+  using (true);
+
+drop policy if exists "series_snapshots are publicly readable" on series_snapshots;
+create policy "series_snapshots are publicly readable"
+  on series_snapshots for select
   using (true);
 
 -- service_role 키는 RLS를 우회하므로 쓰기용 정책은 별도로 필요 없음 (수집기는 service role key 사용)

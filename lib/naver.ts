@@ -63,6 +63,55 @@ async function fetchJsonWithRetry<T>(
   throw lastError;
 }
 
+async function fetchTextWithRetry(
+  url: string,
+  init: RequestInit,
+  retries = 2,
+  timeoutMs = 10000
+): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} for ${url}`);
+      }
+      return await res.text();
+    } catch (err) {
+      clearTimeout(timer);
+      lastError = err;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1) ** 2));
+      }
+    }
+  }
+  throw lastError;
+}
+
+/** "993.8만" -> 9938000, "3.1천" -> 3100, "12345" -> 12345 형태의 네이버 축약 숫자 표기 파싱 */
+function parseKoreanCount(text: string): number {
+  const match = text.trim().match(/^([\d.]+)\s*(억|만|천)?$/);
+  if (!match) return 0;
+  const value = parseFloat(match[1]);
+  const unit = match[2];
+  const multiplier = unit === "억" ? 1e8 : unit === "만" ? 1e4 : unit === "천" ? 1e3 : 1;
+  return Math.round(value * multiplier);
+}
+
+/** 네이버 시리즈 작품의 누적 다운로드수 (productNo는 series.naver.com/comic/detail.series?productNo=X 의 X) */
+export async function fetchSeriesDownloadCount(productNo: number): Promise<number> {
+  const html = await fetchTextWithRetry(
+    `https://series.naver.com/comic/detail.series?productNo=${productNo}`,
+    { headers: { "User-Agent": USER_AGENT } }
+  );
+  const match = html.match(/btn_download"><span>([^<]*)<\/span>/);
+  if (!match) throw new Error(`다운로드수를 찾을 수 없음 (productNo=${productNo})`);
+  return parseKoreanCount(match[1]);
+}
+
 /** 특정 요일에 연재중인 작품 목록 */
 export async function fetchWeekdayTitles(week: Weekday): Promise<TitleListItem[]> {
   const data = await fetchJsonWithRetry<{ titleList: TitleListItem[] }>(
