@@ -9,9 +9,14 @@ export interface TitleRow {
   is_active: boolean;
   is_finished: boolean;
   is_on_hiatus: boolean;
+  is_adult: boolean;
+  is_new: boolean;
   studio_name: string | null;
   studio_website_url: string | null;
   synopsis: string | null;
+  writer: string | null;
+  painter: string | null;
+  origin_author: string | null;
 }
 
 export interface EpisodeRow {
@@ -53,7 +58,7 @@ export async function searchTitles(query: string): Promise<TitleRow[]> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,studio_name,studio_website_url,synopsis")
+    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,is_adult,is_new,studio_name,studio_website_url,synopsis,writer,painter,origin_author")
     .eq("is_active", true)
     .ilike("title_name", `%${query}%`)
     .order("title_name")
@@ -66,7 +71,7 @@ export async function getTitle(titleId: number): Promise<TitleRow | null> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,studio_name,studio_website_url,synopsis")
+    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,is_adult,is_new,studio_name,studio_website_url,synopsis,writer,painter,origin_author")
     .eq("title_id", titleId)
     .maybeSingle();
   if (error) throw error;
@@ -75,9 +80,10 @@ export async function getTitle(titleId: number): Promise<TitleRow | null> {
 
 export interface EpisodeWithCount extends EpisodeRow {
   comment_count: number | null;
+  treatment: string | null;
 }
 
-/** 작품의 회차 목록 + 최신 댓글수 (최신순) */
+/** 작품의 회차 목록 + 최신 댓글수 + 사용자가 입력한 트리트먼트 (최신순) */
 export async function getEpisodesWithLatestCount(titleId: number): Promise<EpisodeWithCount[]> {
   const supabase = getSupabaseAnon();
   const { data: episodes, error: episodesError } = await supabase
@@ -88,9 +94,13 @@ export async function getEpisodesWithLatestCount(titleId: number): Promise<Episo
   if (episodesError) throw episodesError;
   if (!episodes || episodes.length === 0) return [];
 
+  // episode_notes는 부가 기능이라 스키마 미반영 등으로 실패해도 본문 조회 자체는 계속되게 함
+  const { data: notes } = await supabase.from("episode_notes").select("no,treatment").eq("title_id", titleId);
+  const treatmentByNo = new Map((notes ?? []).map((n) => [n.no, n.treatment as string | null]));
+
   const latestDate = await getLatestSnapshotDate();
   if (!latestDate) {
-    return episodes.map((e) => ({ ...e, comment_count: null }));
+    return episodes.map((e) => ({ ...e, comment_count: null, treatment: treatmentByNo.get(e.no) ?? null }));
   }
 
   const { data: snapshots, error: snapshotsError } = await supabase
@@ -101,7 +111,149 @@ export async function getEpisodesWithLatestCount(titleId: number): Promise<Episo
   if (snapshotsError) throw snapshotsError;
 
   const countByNo = new Map((snapshots ?? []).map((s) => [s.no, s.comment_count]));
-  return episodes.map((e) => ({ ...e, comment_count: countByNo.get(e.no) ?? null }));
+  return episodes.map((e) => ({
+    ...e,
+    comment_count: countByNo.get(e.no) ?? null,
+    treatment: treatmentByNo.get(e.no) ?? null,
+  }));
+}
+
+/** 회차별 트리트먼트(내용 메모) 저장 - 대시보드에서 사용자가 직접 입력 */
+export async function saveEpisodeTreatment(titleId: number, no: number, treatment: string): Promise<void> {
+  const supabase = getSupabaseAnon();
+  const { error } = await supabase
+    .from("episode_notes")
+    .upsert(
+      { title_id: titleId, no, treatment, updated_at: new Date().toISOString() },
+      { onConflict: "title_id,no" }
+    );
+  if (error) throw error;
+}
+
+export interface TitleNotes {
+  logline: string | null;
+  subject: string | null;
+  target_audience: string | null;
+  comment: string | null;
+}
+
+/** 작품에 사용자가 입력한 로그라인/소재/타깃층/코멘트 (부가 기능이라 실패해도 조용히 null 처리) */
+export async function getTitleNotes(titleId: number): Promise<TitleNotes> {
+  const supabase = getSupabaseAnon();
+  const { data } = await supabase
+    .from("title_notes")
+    .select("logline,subject,target_audience,comment")
+    .eq("title_id", titleId)
+    .maybeSingle();
+  return {
+    logline: data?.logline ?? null,
+    subject: data?.subject ?? null,
+    target_audience: data?.target_audience ?? null,
+    comment: data?.comment ?? null,
+  };
+}
+
+/** 작품 단위 로그라인/소재/타깃층 저장 - 대시보드에서 사용자가 직접 입력 */
+export async function saveTitleNotes(titleId: number, notes: TitleNotes): Promise<void> {
+  const supabase = getSupabaseAnon();
+  const { error } = await supabase
+    .from("title_notes")
+    .upsert(
+      { title_id: titleId, ...notes, updated_at: new Date().toISOString() },
+      { onConflict: "title_id" }
+    );
+  if (error) throw error;
+}
+
+export interface ExportTitleRow {
+  title_id: number;
+  title_name: string;
+  weekday: string | null;
+  is_adult: boolean;
+  age_rating: string | null;
+  writer: string | null;
+  painter: string | null;
+  origin_author: string | null;
+  studio_name: string | null;
+  is_finished: boolean;
+  is_on_hiatus: boolean;
+  star_score: number | null;
+  popularity_rank: number | null;
+  launch_date: string | null;
+  total_comment_count: number | null;
+  download_count: number | null;
+  genre: string | null;
+  subject: string | null;
+  logline: string | null;
+  target_audience: string | null;
+  comment: string | null;
+}
+
+/** 전체 작품 엑셀 내보내기용 데이터 (연재중/완결 필터, 페이지네이션 없음) */
+export async function getExportTitlesData(opts: {
+  status?: TitleStatusFilter;
+  type?: TitleTypeFilter;
+  adultOnly?: boolean;
+  launchFrom?: string;
+  launchTo?: string;
+  sortBy?: TitleSortBy;
+}): Promise<ExportTitleRow[]> {
+  const supabase = getSupabaseAnon();
+  // PostgREST 기본 응답 상한(1000행)에 걸리지 않도록 페이지네이션해서 전체를 모음
+  const PAGE_SIZE = 1000;
+  const all: ExportTitleRow[] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .rpc("export_titles_data", {
+        filter_status: opts.status ?? "all",
+        filter_type: opts.type ?? "all",
+        filter_adult_only: opts.adultOnly ?? false,
+        filter_launch_from: opts.launchFrom ?? null,
+        filter_launch_to: opts.launchTo ?? null,
+        sort_by: opts.sortBy ?? "name",
+      })
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as ExportTitleRow[];
+    all.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
+export interface CommentSnapshotRaw {
+  no: number;
+  snapshot_date: string;
+  comment_count: number;
+}
+
+/** 작품의 회차×날짜별 댓글수 전체 (엑셀 내보내기용, 날짜별로 넓게 펼치기 전 원본) */
+export async function getAllCommentSnapshots(titleId: number): Promise<CommentSnapshotRaw[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("comment_snapshots")
+    .select("no,snapshot_date,comment_count")
+    .eq("title_id", titleId)
+    .order("snapshot_date", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as CommentSnapshotRaw[];
+}
+
+export interface PopularityHistoryPoint {
+  snapshot_date: string;
+  popularity_rank: number | null;
+}
+
+/** 작품의 날짜별 인기순위 추이 (엑셀 내보내기용) */
+export async function getPopularityRankHistory(titleId: number): Promise<PopularityHistoryPoint[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("title_snapshots")
+    .select("snapshot_date,popularity_rank")
+    .eq("title_id", titleId)
+    .order("snapshot_date", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as PopularityHistoryPoint[];
 }
 
 export interface SnapshotPoint {
@@ -312,4 +464,228 @@ export async function getEpisode(titleId: number, no: number): Promise<EpisodeRo
     .maybeSingle();
   if (error) throw error;
   return data as EpisodeRow | null;
+}
+
+/** 회차에 사용자가 입력한 트리트먼트 (부가 기능이라 실패해도 null로 조용히 처리) */
+export async function getEpisodeTreatment(titleId: number, no: number): Promise<string | null> {
+  const supabase = getSupabaseAnon();
+  const { data } = await supabase
+    .from("episode_notes")
+    .select("treatment")
+    .eq("title_id", titleId)
+    .eq("no", no)
+    .maybeSingle();
+  return (data?.treatment as string | null) ?? null;
+}
+
+export type TitleSortBy = "name" | "popularity" | "star" | "launch" | "comments";
+export type TitleStatusFilter = "all" | "ongoing" | "new" | "finished" | "hiatus";
+export type TitleTypeFilter = "all" | "weekday" | "daily_plus";
+
+export interface TitleListRow {
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  author: string | null;
+  studio_name: string | null;
+  is_finished: boolean;
+  is_on_hiatus: boolean;
+  is_adult: boolean;
+  is_new: boolean;
+  weekday: string | null;
+  star_score: number | null;
+  popularity_rank: number | null;
+  launch_date: string | null;
+  total_comment_count: number | null;
+}
+
+export interface TitleListResult {
+  rows: TitleListRow[];
+  totalCount: number;
+}
+
+/** 전체 작품 리스트 (연재구분/상태/성인 필터, 정렬, 페이지네이션) */
+export async function listTitles(opts: {
+  type?: TitleTypeFilter;
+  status?: TitleStatusFilter;
+  sortBy?: TitleSortBy;
+  page?: number;
+  pageSize?: number;
+  adultOnly?: boolean;
+  launchFrom?: string;
+  launchTo?: string;
+}): Promise<TitleListResult> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("list_titles", {
+    filter_type: opts.type ?? "all",
+    filter_status: opts.status ?? "all",
+    sort_by: opts.sortBy ?? "name",
+    page_num: opts.page ?? 1,
+    page_size: opts.pageSize ?? 50,
+    filter_adult_only: opts.adultOnly ?? false,
+    filter_launch_from: opts.launchFrom ?? null,
+    filter_launch_to: opts.launchTo ?? null,
+  });
+  if (error) throw error;
+  const rows = (data ?? []) as (TitleListRow & { total_count: number })[];
+  const totalCount = rows[0]?.total_count ?? 0;
+  return { rows: rows.map(({ total_count: _total_count, ...r }) => r), totalCount };
+}
+
+export interface StudioTitleRow {
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  studio_name: string;
+  studio_website_url: string | null;
+  weekday: string | null;
+  popularity_rank: number | null;
+  star_score: number | null;
+}
+
+export interface StudioGroup {
+  studioName: string;
+  studioWebsiteUrl: string | null;
+  titles: StudioTitleRow[];
+}
+
+/** 제작사별로 그룹핑한 작품 목록 (제목/인기순위 포함 카드용, 작품 수 많은 제작사 순) */
+export async function getTitlesByStudio(): Promise<StudioGroup[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("titles_by_studio");
+  if (error) throw error;
+  const rows = (data ?? []) as StudioTitleRow[];
+
+  const groups = new Map<string, StudioTitleRow[]>();
+  for (const row of rows) {
+    const list = groups.get(row.studio_name) ?? [];
+    list.push(row);
+    groups.set(row.studio_name, list);
+  }
+
+  return [...groups.entries()]
+    .map(([studioName, titles]) => ({
+      studioName,
+      studioWebsiteUrl: titles.find((t) => t.studio_website_url)?.studio_website_url ?? null,
+      titles: titles.sort((a, b) => {
+        const rankA = a.popularity_rank ?? Infinity;
+        const rankB = b.popularity_rank ?? Infinity;
+        if (rankA !== rankB) return rankA - rankB;
+        return (b.star_score ?? 0) - (a.star_score ?? 0);
+      }),
+    }))
+    .sort((a, b) => b.titles.length - a.titles.length || a.studioName.localeCompare(b.studioName, "ko"));
+}
+
+/** 특정 제작사(별칭 반영된 대표 표기)의 작품만 조회 - 제작사 상세페이지 작품 탭용 */
+export async function getStudioTitles(studioName: string): Promise<StudioGroup | null> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("titles_by_studio").eq("studio_name", studioName);
+  if (error) throw error;
+  const rows = (data ?? []) as StudioTitleRow[];
+  if (rows.length === 0) return null;
+  return {
+    studioName,
+    studioWebsiteUrl: rows.find((t) => t.studio_website_url)?.studio_website_url ?? null,
+    titles: rows.sort((a, b) => {
+      const rankA = a.popularity_rank ?? Infinity;
+      const rankB = b.popularity_rank ?? Infinity;
+      if (rankA !== rankB) return rankA - rankB;
+      return (b.star_score ?? 0) - (a.star_score ?? 0);
+    }),
+  };
+}
+
+export interface JobPostingRow {
+  source: "SARAMIN" | "JOBKOREA";
+  title: string;
+  url: string;
+  status: "ACTIVE" | "CLOSED";
+  dday: string | null;
+}
+
+/** 특정 제작사의 채용공고 전체(진행중+마감) - 제작사 상세페이지 채용공고 탭용 */
+export async function getStudioJobPostings(studioName: string): Promise<JobPostingRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("studio_job_postings")
+    .select("source,title,url,status,dday")
+    .eq("studio_name", studioName)
+    .order("status", { ascending: true })
+    .order("title", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as JobPostingRow[];
+}
+
+export interface ActiveJobPostingGroup {
+  studioName: string;
+  postings: JobPostingRow[];
+}
+
+/** 전체 제작사의 현재 진행중인 채용공고 - 채용공고 탭용 */
+export async function getActiveJobPostingsByStudio(): Promise<ActiveJobPostingGroup[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("studio_job_postings")
+    .select("studio_name,source,title,url,status,dday")
+    .eq("status", "ACTIVE")
+    .order("studio_name", { ascending: true });
+  if (error) throw error;
+  const rows = (data ?? []) as (JobPostingRow & { studio_name: string })[];
+
+  const groups = new Map<string, JobPostingRow[]>();
+  for (const row of rows) {
+    const list = groups.get(row.studio_name) ?? [];
+    list.push({ source: row.source, title: row.title, url: row.url, status: row.status, dday: row.dday });
+    groups.set(row.studio_name, list);
+  }
+  return [...groups.entries()].map(([studioName, postings]) => ({ studioName, postings }));
+}
+
+/**
+ * 채용정보 링크 등록 여부 - 제작사 상세페이지에서 메시지 분기용.
+ * null: studio_recruit_links에 아예 등록 안 됨 -> "사이트 내 기업 정보가 없습니다."
+ * 등록은 됐지만 공고가 0건 -> "현재 진행 중인 공고가 없습니다."
+ */
+export async function getStudioRecruitLinkInfo(
+  studioName: string
+): Promise<{ hasSaramin: boolean; hasJobKorea: boolean } | null> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("studio_recruit_links")
+    .select("saramin_url,jobkorea_url")
+    .eq("studio_name", studioName)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return { hasSaramin: !!data.saramin_url, hasJobKorea: !!data.jobkorea_url };
+}
+
+export type TagType = "GENRE" | "KEYWORD";
+
+export interface TagStatRow {
+  tag_name: string;
+  title_count: number;
+}
+
+/** 장르/키워드별 통계 (연재중인 작품 기준, 작품 수 많은 순) - 네이버 태그(article/list/info) 그대로 집계 */
+export async function getTagStats(tagType: TagType, limit = 15): Promise<TagStatRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("tag_stats", {
+    tag_type_filter: tagType,
+    result_limit: limit,
+  });
+  if (error) throw error;
+  return (data ?? []) as TagStatRow[];
+}
+
+/** 작품의 장르 태그 목록 (title_tags에 매일 수집기가 저장해둔 값) */
+export async function getTitleGenres(titleId: number): Promise<string[]> {
+  const supabase = getSupabaseAnon();
+  const { data } = await supabase
+    .from("title_tags")
+    .select("tag_name")
+    .eq("title_id", titleId)
+    .eq("tag_type", "GENRE");
+  return (data ?? []).map((r) => r.tag_name as string);
 }

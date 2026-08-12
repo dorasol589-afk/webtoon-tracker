@@ -15,6 +15,8 @@ export interface TitleListItem {
   finish: boolean;
   rest: boolean;
   starScore: number;
+  adult: boolean;
+  new: boolean;
 }
 
 export type RankOrder = "user" | "star" | "view";
@@ -99,14 +101,37 @@ async function fetchTextWithRetry(
   throw lastError;
 }
 
-/** "993.8만" -> 9938000, "3.1천" -> 3100, "12345" -> 12345 형태의 네이버 축약 숫자 표기 파싱 */
-function parseKoreanCount(text: string): number {
-  const match = text.trim().match(/^([\d.]+)\s*(억|만|천)?$/);
-  if (!match) return 0;
-  const value = parseFloat(match[1]);
-  const unit = match[2];
-  const multiplier = unit === "억" ? 1e8 : unit === "만" ? 1e4 : unit === "천" ? 1e3 : 1;
-  return Math.round(value * multiplier);
+/**
+ * "993.8만" -> 9938000, "3.1천" -> 3100, "12345" -> 12345 형태의 네이버 축약 숫자 표기 파싱.
+ * 형식이 안 맞으면(예: 로딩 중 빈 텍스트 등 일시적 응답) null을 반환 - 절대 0으로 조용히
+ * 대체하면 안 됨(실제 감소로 오인되어 대시보드에 급락으로 표시되는 사고가 실제로 있었음).
+ */
+function parseKoreanCount(text: string): number | null {
+  // 1000만 이상이면 "1,004만"처럼 천단위 콤마가 붙고, 1억 이상이면 "1억 196만"처럼 억+만이 같이 붙어 나옴
+  let s = text.trim().replace(/,/g, "");
+  if (!s || !/^[\d.\s억만천]+$/.test(s)) return null;
+
+  let total = 0;
+  const takeUnit = (unit: string, multiplier: number) => {
+    const idx = s.indexOf(unit);
+    if (idx === -1) return;
+    const numPart = s.slice(0, idx).trim();
+    if (numPart) {
+      const value = parseFloat(numPart);
+      if (!Number.isNaN(value)) total += value * multiplier;
+    }
+    s = s.slice(idx + 1).trim();
+  };
+  takeUnit("억", 1e8);
+  takeUnit("만", 1e4);
+  takeUnit("천", 1e3);
+  if (s) {
+    const value = parseFloat(s);
+    if (Number.isNaN(value)) return null;
+    total += value;
+  }
+  if (total === 0 && !/\d/.test(text)) return null;
+  return Math.round(total);
 }
 
 /** 네이버 시리즈 작품의 누적 다운로드수 (productNo는 series.naver.com/comic/detail.series?productNo=X 의 X) */
@@ -117,7 +142,11 @@ export async function fetchSeriesDownloadCount(productNo: number): Promise<numbe
   );
   const match = html.match(/btn_download"><span>([^<]*)<\/span>/);
   if (!match) throw new Error(`다운로드수를 찾을 수 없음 (productNo=${productNo})`);
-  return parseKoreanCount(match[1]);
+  const count = parseKoreanCount(match[1]);
+  if (count === null) {
+    throw new Error(`다운로드수 형식을 해석할 수 없음 (productNo=${productNo}, raw="${match[1]}")`);
+  }
+  return count;
 }
 
 /** 특정 요일에 연재중인 작품 목록 */
@@ -139,6 +168,30 @@ export async function fetchAllOngoingTitles(): Promise<TitleListItem[]> {
     }
   }
   return [...byId.values()];
+}
+
+interface FinishedTitleListResponse {
+  titleList: TitleListItem[];
+  pageInfo: { totalPages: number };
+}
+
+/** 완결 작품 목록 (페이지네이션, page당 45개) */
+async function fetchFinishedTitlesPage(page: number): Promise<FinishedTitleListResponse> {
+  return fetchJsonWithRetry<FinishedTitleListResponse>(
+    `https://comic.naver.com/api/webtoon/titlelist/finished?page=${page}`,
+    { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
+  );
+}
+
+/** 완결 작품 전체 목록 (전체 페이지 순회, 약 3000여개) */
+export async function fetchAllFinishedTitles(): Promise<TitleListItem[]> {
+  const first = await fetchFinishedTitlesPage(1);
+  const all = [...first.titleList];
+  for (let page = 2; page <= first.pageInfo.totalPages; page++) {
+    const { titleList } = await fetchFinishedTitlesPage(page);
+    all.push(...titleList);
+  }
+  return all;
 }
 
 /**
@@ -250,4 +303,113 @@ export async function fetchCommentStats(titleId: number, no: number): Promise<Co
     commentCount: data.result?.page?.activePostCount ?? 0,
     postCount: data.result?.page?.postCount ?? 0,
   };
+}
+
+/** 회차 no의 댓글 페이지가 존재하는지(=해당 화가 실제로 있는지) 확인. 404는 명확히 "없음"으로 취급하고, 그 외 오류는 재시도 후에도 실패하면 던짐 */
+async function commentPageExists(titleId: number, no: number, retries = 2): Promise<boolean> {
+  const url = `https://comic.naver.com/comment/api/community/v1/page/webtoon_${titleId}_${no}/top-recent-posts?topCount=0&recentTopCount=0&pinRepresentation=distinct`;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "*/*",
+          Referer: `https://comic.naver.com/webtoon/detail?titleId=${titleId}&no=${no}`,
+          "service-ticket-id": "comic_webtoon",
+          "service-type": "KW",
+          language: "KOREAN",
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.status === 404) return false;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return true;
+    } catch (err) {
+      clearTimeout(timer);
+      lastError = err;
+      if (attempt < retries) await new Promise((r) => setTimeout(r, 500 * (attempt + 1) ** 2));
+    }
+  }
+  throw lastError;
+}
+
+export interface TitleInfo {
+  writers: string[];
+  painters: string[];
+  originAuthors: string[];
+  weekdays: string[];
+  genres: string[];
+  keywords: string[];
+  ageRating: string;
+}
+
+interface ArticleListInfoFullResponse {
+  communityArtists?: { name: string; artistTypeList: string[] }[];
+  publishDayOfWeekList?: string[];
+  curationTagList?: { tagName: string; curationType: string }[];
+  age?: { type: string; description?: string };
+}
+
+/** 작품 상세(글/그림/원작 작가, 연재요일, 장르/키워드 태그) - 매일 수집기와 단건 엑셀 내보내기가 공유 */
+export async function fetchTitleInfo(titleId: number): Promise<TitleInfo> {
+  const data = await fetchJsonWithRetry<ArticleListInfoFullResponse>(
+    `https://comic.naver.com/api/article/list/info?titleId=${titleId}`,
+    { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
+  );
+  const writers: string[] = [];
+  const painters: string[] = [];
+  const originAuthors: string[] = [];
+  for (const a of data.communityArtists ?? []) {
+    if (a.artistTypeList.includes("ARTIST_WRITER")) writers.push(a.name);
+    if (a.artistTypeList.includes("ARTIST_PAINTER")) painters.push(a.name);
+    if (a.artistTypeList.some((t) => t.includes("ORIGIN"))) originAuthors.push(a.name);
+  }
+  const genres: string[] = [];
+  const keywords: string[] = [];
+  for (const tag of data.curationTagList ?? []) {
+    if (tag.curationType.startsWith("GENRE_")) genres.push(tag.tagName);
+    else if (tag.curationType === "CUSTOM_TAG") keywords.push(tag.tagName);
+  }
+  const ageRating = data.age?.description || "전체이용가";
+  return {
+    writers,
+    painters,
+    originAuthors,
+    weekdays: data.publishDayOfWeekList ?? [],
+    genres,
+    keywords,
+    ageRating,
+  };
+}
+
+/**
+ * 성인 작품은 회차 목록 API(article/list)가 로그인 없이는 401(LOGIN)로 막혀있다 (확인 완료).
+ * 다만 댓글 API는 로그인 없이도 열려있고, 존재하지 않는 화는 404를 반환하므로
+ * 이를 이용해 이진탐색으로 마지막 화 번호를 찾아 회차 목록을 대체한다.
+ */
+export async function findLastEpisodeNoViaComments(titleId: number): Promise<number> {
+  const MAX_PROBE = 3000;
+  if (!(await commentPageExists(titleId, 1))) return 0;
+
+  let lo = 1;
+  let hi = 2;
+  while (hi <= MAX_PROBE && (await commentPageExists(titleId, hi))) {
+    lo = hi;
+    hi *= 2;
+  }
+  if (hi > MAX_PROBE) hi = MAX_PROBE;
+
+  while (lo + 1 < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (await commentPageExists(titleId, mid)) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
 }

@@ -49,4 +49,7 @@ next-env.d.ts
 /cpnames.json
 /studio_websites.json
 /series_match_*.json
+/studios_list.csv
+/studio_dupe_candidates.csv
+/스튜디오 상세페이지.csv
 *.xlsx

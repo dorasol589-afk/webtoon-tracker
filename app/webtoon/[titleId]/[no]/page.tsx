@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getTitle, getEpisode, getEpisodeHistory } from "@/lib/queries";
+import { getTitle, getEpisode, getEpisodeHistory, getEpisodeTreatment } from "@/lib/queries";
 import CommentTrendChart from "./CommentTrendChart";
+import TreatmentCell from "../TreatmentCell";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +16,11 @@ export default async function EpisodePage({
   const episodeNo = Number(no);
   if (!Number.isInteger(id) || !Number.isInteger(episodeNo)) notFound();
 
-  const [title, episode, history] = await Promise.all([
+  const [title, episode, history, treatment] = await Promise.all([
     getTitle(id),
     getEpisode(id, episodeNo),
     getEpisodeHistory(id, episodeNo),
+    getEpisodeTreatment(id, episodeNo),
   ]);
   if (!title || !episode) notFound();
 
@@ -42,6 +44,11 @@ export default async function EpisodePage({
       </p>
 
       <CommentTrendChart data={history} />
+
+      <div className="mt-6">
+        <h2 className="mb-2 text-sm font-semibold text-neutral-500">트리트먼트</h2>
+        <TreatmentCell titleId={id} no={episodeNo} initialValue={treatment} rows={6} />
+      </div>
     </div>
   );
 }

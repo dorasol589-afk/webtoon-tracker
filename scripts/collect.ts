@@ -10,14 +10,18 @@ loadEnv({ path: ".env.local" });
 loadEnv();
 import {
   fetchAllOngoingTitles,
+  fetchAllFinishedTitles,
   fetchAllEpisodes,
   fetchCommentStats,
   fetchWeekdayRankMap,
   fetchSeriesDownloadCount,
   fetchRealtimeRanking,
+  findLastEpisodeNoViaComments,
+  fetchTitleInfo,
   type RealtimeRankCategory,
 } from "../lib/naver";
 import { SERIES_WATCHLIST } from "../lib/seriesWatchlist";
+import { fetchSaraminJobs, fetchJobKoreaJobs, findAmbiguousJobKoreaPostings, type JobPosting } from "../lib/recruit";
 
 function getKstDateString(): string {
   const now = new Date();
@@ -26,6 +30,16 @@ function getKstDateString(): string {
   const m = String(kst.getMonth() + 1).padStart(2, "0");
   const d = String(kst.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+// 오늘 KST 기준 hour:minute 시각을 실제 epoch ms로 환산 (완결작 백필 시간 예산 마감 계산용)
+function getKstDeadlineTimestamp(hour: number, minute: number): number {
+  const now = new Date();
+  const kstNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  const deadlineKst = new Date(kstNow);
+  deadlineKst.setHours(hour, minute, 0, 0);
+  const diffMs = deadlineKst.getTime() - kstNow.getTime();
+  return now.getTime() + diffMs;
 }
 
 function parseServiceDate(desc: string): string | null {
@@ -56,7 +70,7 @@ async function main() {
   const hasDb = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
   const snapshotDate = getKstDateString();
 
-  console.log(`[1/7] 연재중인 작품 목록 조회...`);
+  console.log(`[1/10] 연재중인 작품 목록 조회...`);
   const allTitles = await fetchAllOngoingTitles();
   const titles = titleLimit ? allTitles.slice(0, titleLimit) : allTitles;
   console.log(
@@ -77,6 +91,8 @@ async function main() {
       is_active: true,
       is_finished: t.finish,
       is_on_hiatus: t.rest,
+      is_adult: t.adult,
+      is_new: t.new,
       last_seen_at: nowIso,
     }));
     for (const batch of chunk(titleRows, 500)) {
@@ -85,12 +101,14 @@ async function main() {
     }
 
     // TITLE_LIMIT으로 일부만 처리한 경우, 나머지 전체를 비활성 처리해버리는 사고를 방지
+    // is_finished=true는 별도(완결 백필 단계)로 관리되는 작품이라 연재목록 기준 비활성화 대상에서 제외
     if (!titleLimit) {
       const currentIds = titles.map((t) => t.titleId);
       const { error: deactivateError } = await supabase
         .from("titles")
         .update({ is_active: false })
         .eq("is_active", true)
+        .eq("is_finished", false)
         .not("title_id", "in", `(${currentIds.join(",") || 0})`);
       if (deactivateError) console.error("  titles 비활성화 실패:", deactivateError.message);
     }
@@ -98,7 +116,66 @@ async function main() {
     console.log("  (SUPABASE_URL/SERVICE_ROLE_KEY 미설정 - 드라이런 모드, DB에 쓰지 않음)");
   }
 
-  console.log(`[2/7] 평점/요일별 랭킹(인기순·별점순·조회순) 조회...`);
+  console.log(`[2/10] 작품별 상세정보(글/그림/원작 작가, 장르/키워드 태그) 조회...`);
+  if (supabase) {
+    const infoLimit = pLimit(10);
+    const tagRows: { title_id: number; tag_name: string; tag_type: string }[] = [];
+    // title_name은 not null 제약이라, upsert의 잠재적 insert 분기가 값을 요구함(기존 행이어도 마찬가지) - 항상 같이 넣어야 함
+    const authorRows: {
+      title_id: number;
+      title_name: string;
+      writer: string | null;
+      painter: string | null;
+      origin_author: string | null;
+      age_rating: string;
+    }[] = [];
+    let infoFailures = 0;
+    await Promise.all(
+      titles.map((title) =>
+        infoLimit(async () => {
+          try {
+            const info = await fetchTitleInfo(title.titleId);
+            for (const g of info.genres) tagRows.push({ title_id: title.titleId, tag_name: g, tag_type: "GENRE" });
+            for (const k of info.keywords) tagRows.push({ title_id: title.titleId, tag_name: k, tag_type: "KEYWORD" });
+            authorRows.push({
+              title_id: title.titleId,
+              title_name: title.titleName,
+              writer: info.writers.join(", ") || null,
+              painter: info.painters.join(", ") || null,
+              origin_author: info.originAuthors.join(", ") || null,
+              age_rating: info.ageRating,
+            });
+          } catch (err) {
+            infoFailures++;
+            console.error(`  상세정보 조회 실패 (titleId=${title.titleId}, ${title.titleName}):`, err);
+          }
+        })
+      )
+    );
+    const dedupedTagRows = dedupeBy(tagRows, (r) => `${r.title_id}_${r.tag_name}`);
+    // 매일 최신 상태로 유지: 이번에 태그를 새로 가져온 작품들의 기존 태그를 지우고 다시 채워서
+    // 더 이상 안 붙는 태그는 자동으로 빠지게 함
+    const successTitleIds = [...new Set(dedupedTagRows.map((r) => r.title_id))];
+    for (const idBatch of chunk(successTitleIds, 500)) {
+      const { error } = await supabase.from("title_tags").delete().in("title_id", idBatch);
+      if (error) console.error("  title_tags 삭제 실패:", error.message);
+    }
+    for (const batch of chunk(dedupedTagRows, 500)) {
+      const { error } = await supabase.from("title_tags").upsert(batch, { onConflict: "title_id,tag_name" });
+      if (error) console.error("  title_tags upsert 실패:", error.message);
+    }
+    for (const batch of chunk(authorRows, 500)) {
+      const { error } = await supabase.from("titles").upsert(batch, { onConflict: "title_id" });
+      if (error) console.error("  titles(작가정보) upsert 실패:", error.message);
+    }
+    console.log(
+      `  태그 ${dedupedTagRows.length}건, 작가정보 ${authorRows.length}건 저장 (조회 실패 ${infoFailures}건)`
+    );
+  } else {
+    console.log("  (드라이런 모드 - 상세정보 조회 생략)");
+  }
+
+  console.log(`[3/10] 평점/요일별 랭킹(인기순·별점순·조회순) 조회...`);
   // 매일+(dailyPlus) 작품은 이 랭킹 API에 없어 rank가 비어있을 수 있음 (star_score는 titles에서 그대로 나옴)
   const [popularityRanks, ratingRanks, viewRanks] = await Promise.all([
     fetchWeekdayRankMap("user"),
@@ -127,7 +204,7 @@ async function main() {
     console.log(`  title_snapshots ${titleSnapshotRows.length}건 저장 완료`);
   }
 
-  console.log(`[3/7] 실시간 랭킹(인기/신작 × 전체/남성/여성 TOP5) 조회...`);
+  console.log(`[4/10] 실시간 랭킹(인기/신작 × 전체/남성/여성 TOP5) 조회...`);
   const [realtimeRanking, realtimeNewRanking] = await Promise.all([
     fetchRealtimeRanking("DEFAULT"),
     fetchRealtimeRanking("NEW"),
@@ -152,16 +229,49 @@ async function main() {
     console.log(`  realtime_ranking_snapshots ${realtimeRows.length}건 저장 완료`);
   }
 
-  console.log(`[4/7] 작품별 회차 목록 조회 및 무료회차 판별...`);
+  console.log(`[5/10] 작품별 회차 목록 조회 및 무료회차 판별...`);
+  // 성인 작품은 article/list가 로그인 없이는 401(LOGIN)로 막혀있어(확인 완료) 회차 목록을 못 가져옴.
+  // 다만 댓글 API는 열려있어서 존재 여부(404)로 이진탐색해 마지막 화 번호를 찾는 방식으로 대체.
+  // 이 경우 무료/유료 여부를 알 방법이 없어 발견된 회차 전부를 추적 대상으로 취급함.
   const episodeLimit = pLimit(5);
   const freeEpisodes: { titleId: number; titleName: string; no: number }[] = [];
   let totalEpisodeCount = 0;
   let episodeFetchFailures = 0;
+  let adultTitleCount = 0;
+  let adultEpisodeCount = 0;
 
   await Promise.all(
     titles.map((title) =>
       episodeLimit(async () => {
         try {
+          if (title.adult) {
+            const lastNo = await findLastEpisodeNoViaComments(title.titleId);
+            totalEpisodeCount += lastNo;
+            adultTitleCount++;
+            adultEpisodeCount += lastNo;
+
+            if (supabase && lastNo > 0) {
+              const episodeRows = Array.from({ length: lastNo }, (_, i) => ({
+                title_id: title.titleId,
+                no: i + 1,
+                subtitle: null,
+                service_date: null,
+                is_free: true,
+              }));
+              for (const batch of chunk(episodeRows, 500)) {
+                const { error } = await supabase.from("episodes").upsert(batch, {
+                  onConflict: "title_id,no",
+                });
+                if (error) console.error(`  episodes upsert 실패(성인, ${title.titleId}):`, error.message);
+              }
+            }
+
+            for (let no = 1; no <= lastNo; no++) {
+              freeEpisodes.push({ titleId: title.titleId, titleName: title.titleName, no });
+            }
+            return;
+          }
+
           const episodes = await fetchAllEpisodes(title.titleId);
           totalEpisodeCount += episodes.length;
 
@@ -201,8 +311,9 @@ async function main() {
     `  전체 회차 ${totalEpisodeCount}개 중 무료회차 ${dedupedFreeEpisodes.length}개 ` +
       `(중복 ${freeEpisodes.length - dedupedFreeEpisodes.length}건 제거, 회차조회 실패 ${episodeFetchFailures}건)`
   );
+  console.log(`  성인 작품 ${adultTitleCount}개는 댓글 API 이진탐색으로 회차 ${adultEpisodeCount}개 발견`);
 
-  console.log(`[5/7] 무료회차 댓글수 수집...`);
+  console.log(`[6/10] 무료회차 댓글수 수집...`);
   const commentLimit = pLimit(15);
   let commentFailures = 0;
   const snapshots: {
@@ -235,7 +346,7 @@ async function main() {
   const dedupedSnapshots = dedupeBy(snapshots, (s) => `${s.title_id}_${s.no}`);
   console.log(`  댓글수 수집 완료: 성공 ${dedupedSnapshots.length}건, 실패 ${commentFailures}건`);
 
-  console.log(`[6/7] 결과 저장...`);
+  console.log(`[7/10] 결과 저장...`);
   if (supabase) {
     for (const batch of chunk(dedupedSnapshots, 500)) {
       const { error } = await supabase
@@ -255,7 +366,7 @@ async function main() {
     }
   }
 
-  console.log(`[7/7] 네이버 시리즈 다운로드수 수집 (우선 추적 5개 + 매칭된 전체)...`);
+  console.log(`[8/10] 네이버 시리즈 다운로드수 수집 (우선 추적 5개 + 매칭된 전체)...`);
   const seriesTargets = new Map<number, { titleId: number; name: string }>();
   for (const item of SERIES_WATCHLIST) {
     seriesTargets.set(item.productNo, { titleId: item.titleId, name: item.name });
@@ -302,11 +413,258 @@ async function main() {
     }
   }
 
+  console.log(`[9/10] 제작사 채용공고(사람인/잡코리아) 조회...`);
+  if (supabase) {
+    const { data: recruitLinks, error: linksError } = await supabase
+      .from("studio_recruit_links")
+      .select("studio_name,saramin_url,jobkorea_url");
+    if (linksError) {
+      console.error("  studio_recruit_links 조회 실패:", linksError.message);
+    } else {
+      const recruitLimit = pLimit(4);
+      let jobFailures = 0;
+      const postingRows: {
+        studio_name: string;
+        source: string;
+        posting_id: string;
+        title: string;
+        url: string;
+        status: string;
+        dday: string | null;
+      }[] = [];
+      const ambiguousJobKorea: (JobPosting & { studioName: string })[] = [];
+      await Promise.all(
+        (recruitLinks ?? []).map((link) =>
+          recruitLimit(async () => {
+            const toRows = (source: "SARAMIN" | "JOBKOREA", jobs: JobPosting[]) =>
+              jobs.map((j) => ({
+                studio_name: link.studio_name,
+                source,
+                posting_id: j.postingId,
+                title: j.title,
+                url: j.url,
+                status: j.status,
+                dday: j.dday,
+              }));
+            try {
+              if (link.saramin_url) postingRows.push(...toRows("SARAMIN", await fetchSaraminJobs(link.saramin_url)));
+            } catch (err) {
+              jobFailures++;
+              console.error(`  사람인 조회 실패 (${link.studio_name}):`, err);
+            }
+            try {
+              if (link.jobkorea_url) {
+                const jobs = await fetchJobKoreaJobs(link.jobkorea_url);
+                postingRows.push(...toRows("JOBKOREA", jobs));
+                ambiguousJobKorea.push(
+                  ...findAmbiguousJobKoreaPostings(jobs.map((j) => ({ ...j, studioName: link.studio_name })))
+                );
+              }
+            } catch (err) {
+              jobFailures++;
+              console.error(`  잡코리아 조회 실패 (${link.studio_name}):`, err);
+            }
+          })
+        )
+      );
+      // 매일 최신 상태로 유지: 이번에 조회한 제작사의 기존 공고를 지우고 다시 채워서
+      // 마감/삭제된 공고는 자동으로 빠지게 함
+      const processedStudios = [...new Set((recruitLinks ?? []).map((l) => l.studio_name))];
+      for (const batch of chunk(processedStudios, 500)) {
+        const { error } = await supabase.from("studio_job_postings").delete().in("studio_name", batch);
+        if (error) console.error("  studio_job_postings 삭제 실패:", error.message);
+      }
+      for (const batch of chunk(postingRows, 500)) {
+        const { error } = await supabase
+          .from("studio_job_postings")
+          .upsert(batch, { onConflict: "studio_name,source,posting_id" });
+        if (error) console.error("  studio_job_postings upsert 실패:", error.message);
+      }
+      console.log(`  채용공고 ${postingRows.length}건 저장 (조회 실패 ${jobFailures}건)`);
+      if (ambiguousJobKorea.length > 0) {
+        console.log(`  잡코리아 마감여부 불명확 ${ambiguousJobKorea.length}건:`);
+        for (const j of ambiguousJobKorea) {
+          console.log(`    - [${j.studioName}] ${j.title} (dday="${j.dday}", status=${j.status}) ${j.url}`);
+        }
+      }
+    }
+  } else {
+    console.log("  (드라이런 모드 - 채용공고 조회 생략)");
+  }
+
+  console.log(`[10/10] 완결 웹툰 초기 백필 (회차+댓글수, 작품당 최초 1회, 08:10 KST까지)...`);
+  let finishedBackfilledCount = 0;
+  let finishedStoppedForTime = false;
+  let finishedTotal = 0;
+  if (titleLimit) {
+    console.log("  (TITLE_LIMIT 테스트 실행이라 완결작 백필은 건너뜀)");
+  } else if (supabase) {
+    const deadline = getKstDeadlineTimestamp(8, 10);
+    console.log(`  마감 시각(KST 08:10): ${new Date(deadline).toISOString()}`);
+
+    const finishedTitles = await fetchAllFinishedTitles();
+    finishedTotal = finishedTitles.length;
+    console.log(`  완결 작품 목록 ${finishedTitles.length}개 확인`);
+    const finishedById = new Map(finishedTitles.map((t) => [t.titleId, t]));
+
+    const nowIso = new Date().toISOString();
+    const finishedRows = finishedTitles.map((t) => ({
+      title_id: t.titleId,
+      title_name: t.titleName,
+      author: t.author,
+      thumbnail_url: t.thumbnailUrl,
+      is_active: true,
+      is_finished: true,
+      is_on_hiatus: t.rest,
+      is_adult: t.adult,
+      is_new: t.new,
+      last_seen_at: nowIso,
+    }));
+    for (const batch of chunk(finishedRows, 500)) {
+      const { error } = await supabase.from("titles").upsert(batch, { onConflict: "title_id" });
+      if (error) console.error("  완결작 titles upsert 실패:", error.message);
+    }
+
+    const episodeLimitFinished = pLimit(4);
+    const commentLimitFinished = pLimit(8);
+    const infoLimitFinished = pLimit(6);
+
+    outer: while (Date.now() < deadline) {
+      const { data: pending, error: pendingError } = await supabase
+        .from("titles")
+        .select("title_id")
+        .eq("is_finished", true)
+        .is("finished_backfilled_at", null)
+        .order("title_id", { ascending: true })
+        .limit(1000);
+      if (pendingError) {
+        console.error("  백필 대상 조회 실패:", pendingError.message);
+        break;
+      }
+      if (!pending || pending.length === 0) {
+        console.log("  완결작 백필 대상 없음 (전부 완료됨)");
+        break;
+      }
+
+      for (const row of pending) {
+        if (Date.now() >= deadline) {
+          finishedStoppedForTime = true;
+          break outer;
+        }
+        const t = finishedById.get(row.title_id);
+        const label = t?.titleName ?? String(row.title_id);
+        try {
+          const [episodes, info] = await Promise.all([
+            episodeLimitFinished(() => fetchAllEpisodes(row.title_id)),
+            infoLimitFinished(() => fetchTitleInfo(row.title_id)).catch((err) => {
+              console.error(`  상세정보 조회 실패 (완결작, ${label}):`, err);
+              return null;
+            }),
+          ]);
+
+          if (info) {
+            const tagRows = [
+              ...info.genres.map((g) => ({ title_id: row.title_id, tag_name: g, tag_type: "GENRE" })),
+              ...info.keywords.map((k) => ({ title_id: row.title_id, tag_name: k, tag_type: "KEYWORD" })),
+            ];
+            const { error: delError } = await supabase.from("title_tags").delete().eq("title_id", row.title_id);
+            if (delError) console.error(`  title_tags 삭제 실패 (${label}):`, delError.message);
+            if (tagRows.length > 0) {
+              const { error: tagError } = await supabase
+                .from("title_tags")
+                .upsert(tagRows, { onConflict: "title_id,tag_name" });
+              if (tagError) console.error(`  title_tags upsert 실패 (${label}):`, tagError.message);
+            }
+            const { error: infoError } = await supabase.from("titles").upsert(
+              {
+                title_id: row.title_id,
+                title_name: label,
+                writer: info.writers.join(", ") || null,
+                painter: info.painters.join(", ") || null,
+                origin_author: info.originAuthors.join(", ") || null,
+                age_rating: info.ageRating,
+              },
+              { onConflict: "title_id" }
+            );
+            if (infoError) console.error(`  titles(작가정보) upsert 실패 (${label}):`, infoError.message);
+          }
+
+          const episodeRows = dedupeBy(
+            episodes.map((e) => ({
+              title_id: row.title_id,
+              no: e.no,
+              subtitle: e.subtitle,
+              service_date: parseServiceDate(e.serviceDateDescription),
+              is_free: !e.charge,
+            })),
+            (e) => `${e.title_id}_${e.no}`
+          );
+          for (const batch of chunk(episodeRows, 500)) {
+            const { error } = await supabase.from("episodes").upsert(batch, { onConflict: "title_id,no" });
+            if (error) console.error(`  episodes upsert 실패 (${label}):`, error.message);
+          }
+
+          const freeEpisodes = episodeRows.filter((e) => e.is_free);
+          const commentResults = await Promise.all(
+            freeEpisodes.map((e) =>
+              commentLimitFinished(async () => {
+                try {
+                  const stats = await fetchCommentStats(row.title_id, e.no);
+                  return {
+                    title_id: row.title_id,
+                    no: e.no,
+                    snapshot_date: snapshotDate,
+                    comment_count: stats.commentCount,
+                    post_count: stats.postCount,
+                  };
+                } catch {
+                  return null;
+                }
+              })
+            )
+          );
+          const snapshotRows = dedupeBy(
+            commentResults.filter((r): r is NonNullable<typeof r> => r !== null),
+            (r) => `${r.title_id}_${r.no}`
+          );
+          for (const batch of chunk(snapshotRows, 500)) {
+            const { error } = await supabase
+              .from("comment_snapshots")
+              .upsert(batch, { onConflict: "title_id,no,snapshot_date" });
+            if (error) console.error(`  comment_snapshots upsert 실패 (${label}):`, error.message);
+          }
+
+          const { error: markError } = await supabase
+            .from("titles")
+            .update({ finished_backfilled_at: new Date().toISOString() })
+            .eq("title_id", row.title_id);
+          if (markError) console.error(`  백필 완료 표시 실패 (${label}):`, markError.message);
+
+          finishedBackfilledCount++;
+          if (finishedBackfilledCount % 50 === 0) {
+            console.log(`  진행: ${finishedBackfilledCount}개 백필 완료...`);
+          }
+        } catch (err) {
+          console.error(`  완결작 백필 실패 (titleId=${row.title_id}, ${label}):`, err);
+        }
+      }
+    }
+
+    console.log(
+      `  완결작 백필 ${finishedBackfilledCount}개 처리${
+        finishedStoppedForTime ? " (시간 마감으로 중단 - 내일 새벽 3:10부터 이어서 진행)" : ""
+      }`
+    );
+  } else {
+    console.log("  (드라이런 모드 - 완결작 백필 생략)");
+  }
+
   const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
     `\n완료: 작품 ${titles.length}개, 회차 ${totalEpisodeCount}개, 무료회차 ${dedupedFreeEpisodes.length}개, ` +
       `댓글수집 성공 ${dedupedSnapshots.length}건 / 실패 ${commentFailures}건, ` +
-      `시리즈 다운로드수 성공 ${seriesRows.length}건 / 실패 ${seriesFailures}건, 소요시간 ${elapsedSec}초`
+      `시리즈 다운로드수 성공 ${seriesRows.length}건 / 실패 ${seriesFailures}건, ` +
+      `완결작 백필 ${finishedBackfilledCount}/${finishedTotal}개, 소요시간 ${elapsedSec}초`
   );
 }
 
