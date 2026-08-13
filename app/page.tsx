@@ -5,6 +5,9 @@ import {
   getWeekdayPopularityRanking,
   getRealtimeRanking,
   getTagStats,
+  getTitlesLaunchedThisWeek,
+  getTitlesNeedingStudioFix,
+  getTopTitlesByDownload,
   type TitleRow,
   type SeriesWatchRow,
   type PopularityRankRow,
@@ -12,8 +15,13 @@ import {
   type RealtimeRankRow,
   type RealtimeRankCategory,
   type TagStatRow,
+  type TitleListRow,
+  type StudioFixRow,
+  type DownloadRankRow,
 } from "@/lib/queries";
 import TagStatsChart from "./TagStatsChart";
+import StudioNameEditor from "./StudioNameEditor";
+import { formatManwon } from "@/lib/format";
 
 const GENDER_TABS: { value: RealtimeRankCategory; label: string }[] = [
   { value: "TOTAL", label: "전체" },
@@ -79,6 +87,9 @@ type LoadResult =
       seriesWatch: SeriesWatchRow[];
       genreStats: TagStatRow[];
       keywordStats: TagStatRow[];
+      thisWeekLaunches: TitleListRow[];
+      studioFixNeeded: StudioFixRow[];
+      downloadRanking: DownloadRankRow[];
     };
 
 async function loadData(
@@ -92,15 +103,27 @@ async function loadData(
     }
     const selectedWeekday = weekdayParam && isWeekday(weekdayParam) ? weekdayParam : getTodayWeekdayKST();
     const selectedGender = genderParam && isGenderCategory(genderParam) ? genderParam : "TOTAL";
-    const [realtimeRanking, weekdayRanking, newReleaseRanking, seriesWatch, genreStats, keywordStats] =
-      await Promise.all([
-        getRealtimeRanking(selectedGender),
-        getWeekdayPopularityRanking(selectedWeekday, 5),
-        getRealtimeRanking("TOTAL", "NEW"),
-        getSeriesWatchlistLatest(),
-        getTagStats("GENRE", 15),
-        getTagStats("KEYWORD", 15),
-      ]);
+    const [
+      realtimeRanking,
+      weekdayRanking,
+      newReleaseRanking,
+      seriesWatch,
+      genreStats,
+      keywordStats,
+      thisWeekLaunches,
+      studioFixNeeded,
+      downloadRanking,
+    ] = await Promise.all([
+      getRealtimeRanking(selectedGender),
+      getWeekdayPopularityRanking(selectedWeekday, 5),
+      getRealtimeRanking("TOTAL", "NEW"),
+      getSeriesWatchlistLatest(),
+      getTagStats("GENRE", 15),
+      getTagStats("KEYWORD", 15),
+      getTitlesLaunchedThisWeek(),
+      getTitlesNeedingStudioFix(),
+      getTopTitlesByDownload(10),
+    ]);
     return {
       type: "rankings",
       realtimeRanking,
@@ -111,6 +134,9 @@ async function loadData(
       seriesWatch,
       genreStats,
       keywordStats,
+      thisWeekLaunches,
+      studioFixNeeded,
+      downloadRanking,
     };
   } catch {
     return { type: "error" };
@@ -189,6 +215,64 @@ export default async function HomePage({
 
       {result.type === "rankings" && (
         <div>
+          {result.thisWeekLaunches.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-3 flex items-baseline gap-2 text-sm font-semibold text-neutral-500">
+                이번주 신작
+                <span className="text-xs text-neutral-400">{result.thisWeekLaunches.length}개</span>
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+                {result.thisWeekLaunches.map((t) => (
+                  <div key={t.title_id} className="rounded-lg border border-neutral-200 bg-white p-2">
+                    <Link href={`/webtoon/${t.title_id}`}>
+                      {t.thumbnail_url && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={t.thumbnail_url}
+                          alt=""
+                          width={112}
+                          height={145}
+                          className="mb-2 h-auto w-full rounded"
+                        />
+                      )}
+                      <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                    </Link>
+                    <StudioNameEditor titleId={t.title_id} studioName={t.studio_name} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {result.studioFixNeeded.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-3 flex items-baseline gap-2 text-sm font-semibold text-neutral-500">
+                제작사 수정 필요
+                <span className="text-xs text-neutral-400">{result.studioFixNeeded.length}개</span>
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+                {result.studioFixNeeded.map((t) => (
+                  <div key={t.title_id} className="rounded-lg border border-neutral-200 bg-white p-2">
+                    <Link href={`/webtoon/${t.title_id}`}>
+                      {t.thumbnail_url && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={t.thumbnail_url}
+                          alt=""
+                          width={112}
+                          height={145}
+                          className="mb-2 h-auto w-full rounded"
+                        />
+                      )}
+                      <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                    </Link>
+                    <StudioNameEditor titleId={t.title_id} studioName={t.studio_name} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:items-start">
             <div>
               <div className="mb-3">
@@ -347,6 +431,43 @@ export default async function HomePage({
                       <DeltaBadge delta={s.delta} />
                     </span>
                   </Link>
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          <section className="mt-8">
+            <h2 className="mb-3 text-sm font-semibold text-neutral-500">다운로드 수 랭킹 TOP10</h2>
+            <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
+              {result.downloadRanking.length === 0 && (
+                <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
+              )}
+              {result.downloadRanking.map((t, i) => (
+                <li key={t.title_id} className="flex items-center gap-3 p-2.5">
+                  <span className="w-5 shrink-0 text-center text-xs text-neutral-400">{i + 1}</span>
+                  <Link href={`/webtoon/${t.title_id}`} className="flex flex-1 items-center gap-3 min-w-0">
+                    {t.thumbnail_url && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={t.thumbnail_url}
+                        alt=""
+                        width={48}
+                        height={62}
+                        className="h-auto w-12 shrink-0 rounded"
+                      />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium hover:underline">
+                        {t.title_name}
+                      </span>
+                      {t.studio_name && (
+                        <span className="block truncate text-xs text-neutral-500">{t.studio_name}</span>
+                      )}
+                    </span>
+                  </Link>
+                  <span className="shrink-0 text-xs text-neutral-600">
+                    {formatManwon(t.download_count)}
+                  </span>
                 </li>
               ))}
             </ol>

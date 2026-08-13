@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { StudioGroup } from "@/lib/queries";
+import { formatManwon } from "@/lib/format";
 
 const WEEKDAY_KO: Record<string, string> = {
   MONDAY: "월",
@@ -15,24 +16,42 @@ const WEEKDAY_KO: Record<string, string> = {
   DAILY_PLUS: "매일+",
 };
 
+type SortBy = "titleCount" | "downloadCount";
+
 export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
   const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState<SortBy>("titleCount");
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return groups;
-    return groups.filter((g) => g.studioName.toLowerCase().includes(q));
-  }, [groups, query]);
+    const base = q ? groups.filter((g) => g.studioName.toLowerCase().includes(q)) : groups;
+    return [...base].sort((a, b) => {
+      if (sortBy === "downloadCount") {
+        return b.totalDownloadCount - a.totalDownloadCount || b.titles.length - a.titles.length;
+      }
+      return b.titles.length - a.titles.length || b.totalDownloadCount - a.totalDownloadCount;
+    });
+  }, [groups, query, sortBy]);
 
   return (
     <div>
-      <input
-        type="text"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="제작사명으로 검색..."
-        className="mb-6 w-full rounded border border-neutral-200 px-3 py-2 text-sm focus:border-neutral-400 focus:outline-none"
-      />
+      <div className="mb-6 flex gap-2">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="제작사명으로 검색..."
+          className="flex-1 rounded border border-neutral-200 px-3 py-2 text-sm focus:border-neutral-400 focus:outline-none"
+        />
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as SortBy)}
+          className="rounded border border-neutral-200 px-2 py-2 text-sm focus:border-neutral-400 focus:outline-none"
+        >
+          <option value="titleCount">작품수순</option>
+          <option value="downloadCount">다운수순</option>
+        </select>
+      </div>
 
       {query && (
         <p className="mb-4 text-sm text-neutral-400">{filtered.length.toLocaleString()}곳 검색됨</p>
@@ -52,6 +71,11 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
               {group.studioName}
             </Link>
             <span className="text-xs text-neutral-400">{group.titles.length}개</span>
+            {group.totalDownloadCount > 0 && (
+              <span className="text-xs text-neutral-400">
+                누적 다운로드 {formatManwon(group.totalDownloadCount)}
+              </span>
+            )}
           </h2>
           <div className="flex gap-3 overflow-x-auto pb-1">
             {group.titles.map((t) => (

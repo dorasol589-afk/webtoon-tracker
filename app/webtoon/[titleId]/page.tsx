@@ -10,6 +10,7 @@ import {
 } from "@/lib/queries";
 import SeriesDownloadChart from "./SeriesDownloadChart";
 import TitleNotesForm from "./TitleNotesForm";
+import StudioNameEditor from "@/app/StudioNameEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -94,23 +95,20 @@ export default async function TitlePage({
               현재 연재목록에서 제외됨
             </span>
           )}
-          {title.studio_name && (
-            <p className="mt-1 text-sm text-neutral-500">
-              제작사:{" "}
-              {title.studio_website_url ? (
-                <a
-                  href={title.studio_website_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline"
-                >
-                  {title.studio_name}
-                </a>
-              ) : (
-                title.studio_name
-              )}
-            </p>
-          )}
+          <div className="mt-1 flex items-center gap-1 text-sm text-neutral-500">
+            제작사:
+            <StudioNameEditor titleId={id} studioName={title.studio_name} />
+            {title.studio_name && title.studio_website_url && (
+              <a
+                href={title.studio_website_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-600 hover:underline"
+              >
+                (홈페이지)
+              </a>
+            )}
+          </div>
           {snapshot && (
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
               {snapshot.star_score !== null && (

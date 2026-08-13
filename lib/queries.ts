@@ -532,6 +532,61 @@ export async function listTitles(opts: {
   return { rows: rows.map(({ total_count: _total_count, ...r }) => r), totalCount };
 }
 
+function getKstMondayDateString(): string {
+  const now = new Date();
+  const kst = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  const day = kst.getDay(); // 0=일요일 ... 6=토요일
+  const diffToMonday = day === 0 ? 6 : day - 1;
+  kst.setDate(kst.getDate() - diffToMonday);
+  const y = kst.getFullYear();
+  const m = String(kst.getMonth() + 1).padStart(2, "0");
+  const d = String(kst.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** 이번주(월요일~오늘, KST)에 1화가 등록된 연재중인 신작 - 홈 화면 "이번주 신작"용 */
+export async function getTitlesLaunchedThisWeek(): Promise<TitleListRow[]> {
+  const monday = getKstMondayDateString();
+  const { rows } = await listTitles({
+    status: "ongoing",
+    launchFrom: monday,
+    sortBy: "launch",
+    pageSize: 200,
+  });
+  return rows;
+}
+
+/** 제작사명 직접 수정 - 홈 화면에서 다중/빈값 바로 고치기용 */
+export async function updateTitleStudioName(titleId: number, studioName: string): Promise<void> {
+  const supabase = getSupabaseAnon();
+  const { error } = await supabase
+    .from("titles")
+    .update({ studio_name: studioName || null })
+    .eq("title_id", titleId);
+  if (error) throw error;
+}
+
+export interface StudioFixRow {
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  studio_name: string | null;
+}
+
+/** 제작사가 다중/빈값이라 수정이 필요한 작품 전체(연재중+휴재중, 완결 제외) - 홈 화면용 */
+export async function getTitlesNeedingStudioFix(): Promise<StudioFixRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("titles")
+    .select("title_id,title_name,thumbnail_url,studio_name")
+    .eq("is_active", true)
+    .eq("is_finished", false)
+    .or("studio_name.eq.다중,studio_name.is.null,studio_name.eq.")
+    .order("title_name", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as StudioFixRow[];
+}
+
 export interface StudioTitleRow {
   title_id: number;
   title_name: string;
@@ -541,15 +596,30 @@ export interface StudioTitleRow {
   weekday: string | null;
   popularity_rank: number | null;
   star_score: number | null;
+  download_count: number | null;
 }
 
 export interface StudioGroup {
   studioName: string;
   studioWebsiteUrl: string | null;
+  totalDownloadCount: number;
   titles: StudioTitleRow[];
 }
 
-/** 제작사별로 그룹핑한 작품 목록 (제목/인기순위 포함 카드용, 작품 수 많은 제작사 순) */
+function sumDownloadCount(titles: StudioTitleRow[]): number {
+  return titles.reduce((sum, t) => sum + (t.download_count ?? 0), 0);
+}
+
+function sortStudioTitles(titles: StudioTitleRow[]): StudioTitleRow[] {
+  return titles.sort((a, b) => {
+    const rankA = a.popularity_rank ?? Infinity;
+    const rankB = b.popularity_rank ?? Infinity;
+    if (rankA !== rankB) return rankA - rankB;
+    return (b.star_score ?? 0) - (a.star_score ?? 0);
+  });
+}
+
+/** 제작사별로 그룹핑한 작품 목록 (제목/인기순위/다운로드수 합계 포함 카드용, 작품 수 많은 제작사 순) */
 export async function getTitlesByStudio(): Promise<StudioGroup[]> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase.rpc("titles_by_studio");
@@ -567,12 +637,8 @@ export async function getTitlesByStudio(): Promise<StudioGroup[]> {
     .map(([studioName, titles]) => ({
       studioName,
       studioWebsiteUrl: titles.find((t) => t.studio_website_url)?.studio_website_url ?? null,
-      titles: titles.sort((a, b) => {
-        const rankA = a.popularity_rank ?? Infinity;
-        const rankB = b.popularity_rank ?? Infinity;
-        if (rankA !== rankB) return rankA - rankB;
-        return (b.star_score ?? 0) - (a.star_score ?? 0);
-      }),
+      totalDownloadCount: sumDownloadCount(titles),
+      titles: sortStudioTitles(titles),
     }))
     .sort((a, b) => b.titles.length - a.titles.length || a.studioName.localeCompare(b.studioName, "ko"));
 }
@@ -587,34 +653,51 @@ export async function getStudioTitles(studioName: string): Promise<StudioGroup |
   return {
     studioName,
     studioWebsiteUrl: rows.find((t) => t.studio_website_url)?.studio_website_url ?? null,
-    titles: rows.sort((a, b) => {
-      const rankA = a.popularity_rank ?? Infinity;
-      const rankB = b.popularity_rank ?? Infinity;
-      if (rankA !== rankB) return rankA - rankB;
-      return (b.star_score ?? 0) - (a.star_score ?? 0);
-    }),
+    totalDownloadCount: sumDownloadCount(rows),
+    titles: sortStudioTitles(rows),
   };
 }
 
 export interface JobPostingRow {
   source: "SARAMIN" | "JOBKOREA";
+  postingId: string;
   title: string;
   url: string;
   status: "ACTIVE" | "CLOSED";
   dday: string | null;
+  applied: boolean;
+}
+
+/** source+posting_id -> applied_at 존재 여부(지원 표시된 공고 키 집합) */
+async function getAppliedPostingKeys(): Promise<Set<string>> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.from("job_posting_applications").select("source,posting_id");
+  if (error) throw error;
+  return new Set((data ?? []).map((r) => `${r.source}_${r.posting_id}`));
 }
 
 /** 특정 제작사의 채용공고 전체(진행중+마감) - 제작사 상세페이지 채용공고 탭용 */
 export async function getStudioJobPostings(studioName: string): Promise<JobPostingRow[]> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase
-    .from("studio_job_postings")
-    .select("source,title,url,status,dday")
-    .eq("studio_name", studioName)
-    .order("status", { ascending: true })
-    .order("title", { ascending: true });
+  const [{ data, error }, appliedKeys] = await Promise.all([
+    supabase
+      .from("studio_job_postings")
+      .select("source,posting_id,title,url,status,dday")
+      .eq("studio_name", studioName)
+      .order("status", { ascending: true })
+      .order("title", { ascending: true }),
+    getAppliedPostingKeys(),
+  ]);
   if (error) throw error;
-  return (data ?? []) as JobPostingRow[];
+  return ((data ?? []) as (Omit<JobPostingRow, "postingId" | "applied"> & { posting_id: string })[]).map((r) => ({
+    source: r.source,
+    postingId: r.posting_id,
+    title: r.title,
+    url: r.url,
+    status: r.status,
+    dday: r.dday,
+    applied: appliedKeys.has(`${r.source}_${r.posting_id}`),
+  }));
 }
 
 export interface ActiveJobPostingGroup {
@@ -625,21 +708,53 @@ export interface ActiveJobPostingGroup {
 /** 전체 제작사의 현재 진행중인 채용공고 - 채용공고 탭용 */
 export async function getActiveJobPostingsByStudio(): Promise<ActiveJobPostingGroup[]> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase
-    .from("studio_job_postings")
-    .select("studio_name,source,title,url,status,dday")
-    .eq("status", "ACTIVE")
-    .order("studio_name", { ascending: true });
+  const [{ data, error }, appliedKeys] = await Promise.all([
+    supabase
+      .from("studio_job_postings")
+      .select("studio_name,source,posting_id,title,url,status,dday")
+      .eq("status", "ACTIVE")
+      .order("studio_name", { ascending: true }),
+    getAppliedPostingKeys(),
+  ]);
   if (error) throw error;
-  const rows = (data ?? []) as (JobPostingRow & { studio_name: string })[];
+  const rows = (data ?? []) as (Omit<JobPostingRow, "postingId" | "applied"> & {
+    studio_name: string;
+    posting_id: string;
+  })[];
 
   const groups = new Map<string, JobPostingRow[]>();
   for (const row of rows) {
     const list = groups.get(row.studio_name) ?? [];
-    list.push({ source: row.source, title: row.title, url: row.url, status: row.status, dday: row.dday });
+    list.push({
+      source: row.source,
+      postingId: row.posting_id,
+      title: row.title,
+      url: row.url,
+      status: row.status,
+      dday: row.dday,
+      applied: appliedKeys.has(`${row.source}_${row.posting_id}`),
+    });
     groups.set(row.studio_name, list);
   }
   return [...groups.entries()].map(([studioName, postings]) => ({ studioName, postings }));
+}
+
+/** 채용공고 지원 여부 토글(존재 = 지원함) */
+export async function setJobApplied(source: string, postingId: string, applied: boolean): Promise<void> {
+  const supabase = getSupabaseAnon();
+  if (applied) {
+    const { error } = await supabase
+      .from("job_posting_applications")
+      .upsert({ source, posting_id: postingId }, { onConflict: "source,posting_id" });
+    if (error) throw error;
+  } else {
+    const { error } = await supabase
+      .from("job_posting_applications")
+      .delete()
+      .eq("source", source)
+      .eq("posting_id", postingId);
+    if (error) throw error;
+  }
 }
 
 /**
@@ -659,6 +774,22 @@ export async function getStudioRecruitLinkInfo(
   if (error) throw error;
   if (!data) return null;
   return { hasSaramin: !!data.saramin_url, hasJobKorea: !!data.jobkorea_url };
+}
+
+export interface DownloadRankRow {
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  studio_name: string | null;
+  download_count: number;
+}
+
+/** 다운로드수 상위 작품 랭킹(제작사 포함) - 홈 화면용 */
+export async function getTopTitlesByDownload(limit = 10): Promise<DownloadRankRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("top_titles_by_download", { result_limit: limit });
+  if (error) throw error;
+  return (data ?? []) as DownloadRankRow[];
 }
 
 export type TagType = "GENRE" | "KEYWORD";

@@ -51,5 +51,6 @@ next-env.d.ts
 /series_match_*.json
 /studios_list.csv
 /studio_dupe_candidates.csv
+/studio_다중_빈값_목록.csv
 /스튜디오 상세페이지.csv
 *.xlsx

@@ -6,6 +6,13 @@
       "runtimeExecutable": "C:\\Users\\doras\\Desktop\\웹툰\\웹툰 분석 홈페이지\\.claude\\dev.cmd",
       "runtimeArgs": [],
       "port": 3000
+    },
+    {
+      "name": "webtoon-recruit",
+      "runtimeExecutable": "C:\\Users\\doras\\Desktop\\웹툰\\웹툰 채용공고\\.claude\\dev.cmd",
+      "runtimeArgs": [],
+      "port": 3001,
+      "autoPort": true
     }
   ]
 }

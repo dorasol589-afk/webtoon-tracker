@@ -71,6 +71,15 @@ create table if not exists title_notes (
 
 alter table title_notes add column if not exists comment text;
 
+-- 채용공고 지원 여부 표시(개인용 체크). studio_job_postings는 매일 삭제 후 재삽입되므로
+-- 거기에 컬럼을 두면 지원 표시가 매일 사라짐 - source+posting_id로 별도 테이블에 독립 보관.
+create table if not exists job_posting_applications (
+  source      text not null,
+  posting_id  text not null,
+  applied_at  timestamptz not null default now(),
+  primary key (source, posting_id)
+);
+
 create table if not exists comment_snapshots (
   title_id      bigint not null,
   no            integer not null,
@@ -246,11 +255,20 @@ alter table studio_recruit_links enable row level security;
 alter table studio_job_postings enable row level security;
 alter table episode_notes enable row level security;
 alter table title_notes enable row level security;
+alter table job_posting_applications enable row level security;
 
 drop policy if exists "titles are publicly readable" on titles;
 create policy "titles are publicly readable"
   on titles for select
   using (true);
+
+-- 홈 화면 "이번주 신작"에서 제작사명(다중/빈값)을 직접 고칠 수 있게 anon 업데이트 허용
+-- (앱 코드에서는 studio_name 컬럼만 갱신함)
+drop policy if exists "titles studio_name is publicly updatable" on titles;
+create policy "titles studio_name is publicly updatable"
+  on titles for update
+  using (true)
+  with check (true);
 
 drop policy if exists "episodes are publicly readable" on episodes;
 create policy "episodes are publicly readable"
@@ -338,6 +356,22 @@ create policy "title_notes are publicly updatable"
   on title_notes for update
   using (true)
   with check (true);
+
+-- job_posting_applications도 동일 (지원 여부 체크는 존재/삭제로 표시하므로 select/insert/delete만 필요)
+drop policy if exists "job_posting_applications are publicly readable" on job_posting_applications;
+create policy "job_posting_applications are publicly readable"
+  on job_posting_applications for select
+  using (true);
+
+drop policy if exists "job_posting_applications are publicly writable" on job_posting_applications;
+create policy "job_posting_applications are publicly writable"
+  on job_posting_applications for insert
+  with check (true);
+
+drop policy if exists "job_posting_applications are publicly deletable" on job_posting_applications;
+create policy "job_posting_applications are publicly deletable"
+  on job_posting_applications for delete
+  using (true);
 
 -- 대시보드용 헬퍼 함수 (anon 키로 호출, RPC)
 
@@ -522,6 +556,7 @@ as $$
 $$;
 
 -- 제작사 탭용: 활성 작품 전체를 제작사 정보와 함께 반환 (제작사별 그룹핑은 애플리케이션 레벨에서 처리)
+drop function if exists titles_by_studio();
 create or replace function titles_by_studio()
 returns table (
   title_id bigint,
@@ -531,27 +566,77 @@ returns table (
   studio_website_url text,
   weekday text,
   popularity_rank integer,
-  star_score numeric
+  star_score numeric,
+  download_count bigint
 )
 language sql
 stable
 as $$
   with latest as (
     select snapshot_date from title_snapshots order by snapshot_date desc limit 1
+  ),
+  latest_series_date as (
+    select title_id, max(snapshot_date) as snapshot_date
+    from series_snapshots
+    group by title_id
+  ),
+  series_latest as (
+    select ss.title_id, ss.download_count
+    from series_snapshots ss
+    join latest_series_date lsd
+      on lsd.title_id = ss.title_id and lsd.snapshot_date = ss.snapshot_date
   )
   select
     ti.title_id, ti.title_name, ti.thumbnail_url,
     coalesce(sa.canonical_name, ti.studio_name) as studio_name,
     ti.studio_website_url,
-    ts.weekday, ts.popularity_rank, ts.star_score
+    ts.weekday, ts.popularity_rank, ts.star_score,
+    sl.download_count
   from titles ti
   left join title_snapshots ts
     on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from latest)
   left join studio_aliases sa on sa.raw_name = ti.studio_name
+  left join series_latest sl on sl.title_id = ti.title_id
   where ti.is_active = true and ti.studio_name is not null;
 $$;
 
--- 장르/키워드 통계: 연재중인(is_active) 작품 중 해당 태그가 붙은 작품 수 상위 N개.
+-- 다운로드수 상위 작품 랭킹(제작사 포함) - 홈 화면용
+drop function if exists top_titles_by_download(int);
+create or replace function top_titles_by_download(result_limit int default 10)
+returns table (
+  title_id bigint,
+  title_name text,
+  thumbnail_url text,
+  studio_name text,
+  download_count bigint
+)
+language sql
+stable
+as $$
+  with latest_series_date as (
+    select title_id, max(snapshot_date) as snapshot_date
+    from series_snapshots
+    group by title_id
+  ),
+  series_latest as (
+    select ss.title_id, ss.download_count
+    from series_snapshots ss
+    join latest_series_date lsd
+      on lsd.title_id = ss.title_id and lsd.snapshot_date = ss.snapshot_date
+  )
+  select
+    ti.title_id, ti.title_name, ti.thumbnail_url,
+    coalesce(sa.canonical_name, ti.studio_name) as studio_name,
+    sl.download_count
+  from titles ti
+  join series_latest sl on sl.title_id = ti.title_id
+  left join studio_aliases sa on sa.raw_name = ti.studio_name
+  where ti.is_active = true
+  order by sl.download_count desc
+  limit result_limit;
+$$;
+
+-- 장르/키워드 통계: 진짜 연재중인(완결/휴재 제외) 작품 중 해당 태그가 붙은 작품 수 상위 N개.
 -- tag_type_filter: 'GENRE' | 'KEYWORD'
 create or replace function tag_stats(tag_type_filter text, result_limit int default 15)
 returns table (tag_name text, title_count bigint)
@@ -561,7 +646,10 @@ as $$
   select tt.tag_name, count(*) as title_count
   from title_tags tt
   join titles ti on ti.title_id = tt.title_id
-  where ti.is_active = true and tt.tag_type = tag_type_filter
+  where ti.is_active = true
+    and ti.is_finished = false
+    and ti.is_on_hiatus = false
+    and tt.tag_type = tag_type_filter
   group by tt.tag_name
   order by title_count desc, tt.tag_name asc
   limit result_limit;
@@ -693,5 +781,6 @@ grant execute on function top_movers(int) to anon;
 grant execute on function weekday_popularity_ranking(text, int) to anon;
 grant execute on function list_titles(text, text, text, int, int, boolean, date, date) to anon;
 grant execute on function titles_by_studio() to anon;
+grant execute on function top_titles_by_download(int) to anon;
 grant execute on function tag_stats(text, int) to anon;
 grant execute on function export_titles_data(text, text, boolean, date, date, text) to anon;

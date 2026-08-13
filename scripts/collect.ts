@@ -71,10 +71,17 @@ async function main() {
   const snapshotDate = getKstDateString();
 
   console.log(`[1/10] 연재중인 작품 목록 조회...`);
-  const allTitles = await fetchAllOngoingTitles();
+  const ongoingTitles = await fetchAllOngoingTitles();
+  // titlelist/finished는 이름과 달리 "지금 신작이 안 올라오는 작품" 전체를 돌려줌 - 그 안에서도
+  // finish=false인 항목은 진짜 완결이 아니라 장기 휴재중인 작품이라, 연재중 취급으로 합쳐서
+  // 매일 댓글/랭킹 수집이 계속되게 함 (휴재작은 요일별 목록에 아예 안 잡히므로 이렇게 안 하면 누락됨).
+  const finishedListRaw = await fetchAllFinishedTitles();
+  const ongoingIds = new Set(ongoingTitles.map((t) => t.titleId));
+  const hiatusNotFinished = finishedListRaw.filter((t) => !t.finish && !ongoingIds.has(t.titleId));
+  const allTitles = [...ongoingTitles, ...hiatusNotFinished];
   const titles = titleLimit ? allTitles.slice(0, titleLimit) : allTitles;
   console.log(
-    `  전체 연재작 ${allTitles.length}개 중 ${titles.length}개 처리 대상${titleLimit ? " (TITLE_LIMIT 적용)" : ""}`
+    `  요일별 연재작 ${ongoingTitles.length}개 + 휴재중(완결 아님) ${hiatusNotFinished.length}개 = ${allTitles.length}개 중 ${titles.length}개 처리 대상${titleLimit ? " (TITLE_LIMIT 적용)" : ""}`
   );
 
   let supabase: ReturnType<typeof import("../lib/supabase").getSupabaseAdmin> | null = null;
@@ -502,13 +509,18 @@ async function main() {
     const deadline = getKstDeadlineTimestamp(8, 10);
     console.log(`  마감 시각(KST 08:10): ${new Date(deadline).toISOString()}`);
 
-    const finishedTitles = await fetchAllFinishedTitles();
+    // step 1에서 이미 받아둔 목록 재사용 (같은 API를 두 번 호출하지 않도록)
+    const finishedTitles = finishedListRaw;
     finishedTotal = finishedTitles.length;
-    console.log(`  완결 작품 목록 ${finishedTitles.length}개 확인`);
+    console.log(`  완결/휴재 작품 목록 ${finishedTitles.length}개 확인`);
     const finishedById = new Map(finishedTitles.map((t) => [t.titleId, t]));
 
     const nowIso = new Date().toISOString();
-    const finishedRows = finishedTitles.map((t) => ({
+    // finish=false인 항목(휴재중)은 step 1에서 이미 titles에 합쳐져 upsert됐으니 여기서는 건드리지 않음 -
+    // 안 그러면 방금 연재중으로 바로잡은 값을 이 배치가 다시 덮어쓸 위험이 있음
+    const finishedRows = finishedTitles
+      .filter((t) => t.finish)
+      .map((t) => ({
       title_id: t.titleId,
       title_name: t.titleName,
       author: t.author,
