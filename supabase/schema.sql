@@ -33,6 +33,12 @@ alter table titles add column if not exists is_new boolean not null default fals
 -- null이면 아직 백필 전 (수집기가 새벽 3:10~8:10 예산 안에서 이어서 처리).
 alter table titles add column if not exists finished_backfilled_at timestamptz;
 
+-- 네이버 시리즈(series.naver.com) 다운로드수 자동 매칭 시도 여부. null이면 아직 시도 안 함 -
+-- 수집기가 매일 밤 이 값이 null인 작품만 새로 매칭 시도해서, 신작이 올라오면 자동으로
+-- 시리즈에 연결되고(매칭 성공시 series_products에 저장) 매일 똑같이 실패하는 작품을 계속
+-- 재시도하지도 않는다(성공/실패 상관없이 시도했으면 찍음).
+alter table titles add column if not exists series_match_checked_at timestamptz;
+
 -- 글/그림/원작 작가 분리 (article/list/info의 communityArtists, 태그 수집과 같이 매일 갱신)
 alter table titles add column if not exists writer text;
 alter table titles add column if not exists painter text;
@@ -112,6 +118,22 @@ create table if not exists title_snapshots (
 
 create index if not exists idx_title_snapshots_date
   on title_snapshots (snapshot_date);
+
+-- 요일별 정확한 순위 저장용: title_snapshots는 작품당 하루 1행이라 화/금처럼 여러 요일
+-- 연재하는 작품은 요일 하나의 순위만 남고 나머지가 사라지는 문제가 있었음(연재 요일마다
+-- 네이버가 순위를 따로 매기므로 값 자체가 다름). 그래서 (작품, 날짜, 요일) 단위로 별도 저장.
+create table if not exists title_weekday_ranks (
+  title_id         bigint not null references titles(title_id),
+  snapshot_date    date not null,
+  weekday          text not null,
+  popularity_rank  integer,
+  rating_rank      integer,
+  view_rank        integer,
+  primary key (title_id, snapshot_date, weekday)
+);
+
+create index if not exists idx_title_weekday_ranks_date
+  on title_weekday_ranks (snapshot_date, weekday);
 
 -- comic.naver.com 작품과 네이버 시리즈(series.naver.com) 작품의 매칭 결과.
 -- lib/seriesWatchlist.ts의 5개는 사용자가 직접 확인한 것이고, 나머지는 검색으로 자동 매칭됨
@@ -285,6 +307,12 @@ create policy "title_snapshots are publicly readable"
   on title_snapshots for select
   using (true);
 
+alter table title_weekday_ranks enable row level security;
+drop policy if exists "title_weekday_ranks are publicly readable" on title_weekday_ranks;
+create policy "title_weekday_ranks are publicly readable"
+  on title_weekday_ranks for select
+  using (true);
+
 drop policy if exists "series_snapshots are publicly readable" on series_snapshots;
 create policy "series_snapshots are publicly readable"
   on series_snapshots for select
@@ -437,6 +465,7 @@ $$;
 drop function if exists overall_star_ranking(int);
 
 -- 요일별 인기순위 (네이버 order=user 기준, 해당 요일 안에서의 순위)
+drop function if exists weekday_popularity_ranking(text, int);
 create or replace function weekday_popularity_ranking(target_weekday text, result_limit int default 30)
 returns table (
   title_id bigint,
@@ -448,14 +477,14 @@ language sql
 stable
 as $$
   with latest as (
-    select snapshot_date from title_snapshots order by snapshot_date desc limit 1
+    select snapshot_date from title_weekday_ranks order by snapshot_date desc limit 1
   )
-  select ts.title_id, ti.title_name, ti.thumbnail_url, ts.popularity_rank
-  from title_snapshots ts
-  join latest on ts.snapshot_date = latest.snapshot_date
-  join titles ti on ti.title_id = ts.title_id
-  where ts.weekday = target_weekday and ts.popularity_rank is not null and ti.is_active = true
-  order by ts.popularity_rank asc
+  select twr.title_id, ti.title_name, ti.thumbnail_url, twr.popularity_rank
+  from title_weekday_ranks twr
+  join latest on twr.snapshot_date = latest.snapshot_date
+  join titles ti on ti.title_id = twr.title_id
+  where twr.weekday = target_weekday and twr.popularity_rank is not null and ti.is_active = true
+  order by twr.popularity_rank asc
   limit result_limit;
 $$;
 
@@ -517,7 +546,12 @@ as $$
       ti.title_id, ti.title_name, ti.thumbnail_url, ti.author, ti.studio_name,
       ti.is_finished, ti.is_on_hiatus, ti.is_adult, ti.is_new,
       ts.weekday, ts.star_score, ts.popularity_rank,
-      (select min(e.service_date) from episodes e where e.title_id = ti.title_id) as launch_date,
+      -- 성인 작품은 회차 목록 API가 막혀있어 episodes.service_date를 알 수 없음(항상 null) -
+      -- 이 경우 우리 수집기가 처음 그 작품을 발견한 날짜(first_seen_at)를 런칭일 대용으로 사용
+      coalesce(
+        (select min(e.service_date) from episodes e where e.title_id = ti.title_id),
+        ti.first_seen_at::date
+      ) as launch_date,
       ct.total_comment_count
     from titles ti
     left join title_snapshots ts
@@ -732,7 +766,10 @@ as $$
       ti.writer, ti.painter, ti.origin_author,
       coalesce(sa.canonical_name, ti.studio_name) as studio_name,
       ti.is_finished, ti.is_on_hiatus, ts.star_score, ts.popularity_rank,
-      (select min(e.service_date) from episodes e where e.title_id = ti.title_id) as launch_date,
+      coalesce(
+        (select min(e.service_date) from episodes e where e.title_id = ti.title_id),
+        ti.first_seen_at::date
+      ) as launch_date,
       ct.total_comment_count,
       sl.download_count,
       ga.genre,

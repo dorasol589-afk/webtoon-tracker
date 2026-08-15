@@ -1,53 +1,20 @@
-// 일회성 스크립트: comic.naver.com의 연재작들을 네이버 시리즈(series.naver.com) 작품과
+// 일회성 백필 스크립트: comic.naver.com의 연재작들을 네이버 시리즈(series.naver.com) 작품과
 // 이름으로 검색해 매칭한다. 확신 있는 매칭만 series_products 테이블에 저장하고,
-// 애매한 건 검토용 엑셀로 뽑는다.
+// 애매한 건 검토용 엑셀로 뽑는다. 매일 새로 올라오는 신작은 scripts/collect.ts가
+// series_match_checked_at을 보고 자동으로 매칭을 시도하므로, 이 스크립트는 그 자동화가
+// 놓친(과거에 실패했던) 작품을 다시 훑고 싶을 때만 수동으로 돌리면 된다.
 // 사용법: npx tsx scripts/matchSeries.ts
 import { config as loadEnv } from "dotenv";
 loadEnv({ path: ".env.local" });
 loadEnv();
 import pLimit from "p-limit";
 import { getSupabaseAdmin } from "../lib/supabase";
-import { fetchSeriesDownloadCount } from "../lib/naver";
-
-const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-function normalize(s: string): string {
-  return s
-    .replace(/\[[^\]]*\]/g, "")
-    .replace(/\([^)]*\)/g, "")
-    .replace(/\s+/g, "")
-    .trim()
-    .toLowerCase();
-}
-
-async function fetchWithRetry(url: string, retries = 3): Promise<string> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.text();
-    } catch (err) {
-      lastError = err;
-      if (attempt < retries) await new Promise((r) => setTimeout(r, 800 * (attempt + 1) ** 2));
-    }
-  }
-  throw lastError;
-}
-
-async function findProductNo(titleName: string): Promise<number | null> {
-  const q = encodeURIComponent(`${titleName} 네이버시리즈`);
-  const html = await fetchWithRetry(`https://search.naver.com/search.naver?query=${q}`);
-  const matches = [...html.matchAll(/series\.naver\.com\/comic\/detail\.series\?productNo=(\d+)/g)];
-  if (matches.length === 0) return null;
-  return parseInt(matches[0][1], 10);
-}
+import { fetchSeriesDownloadCount, findMatchingSeriesProduct } from "../lib/naver";
 
 interface MatchResult {
   titleId: number;
   titleName: string;
-  status: "matched" | "no_candidate" | "title_mismatch" | "error";
+  status: "matched" | "no_candidate_or_mismatch" | "error";
   productNo?: number;
   seriesTitle?: string;
   error?: string;
@@ -62,71 +29,49 @@ async function main() {
       .from("titles")
       .select("title_id,title_name")
       .eq("is_active", true)
+      .eq("is_finished", false)
+      .is("series_match_checked_at", null)
       .range(from, from + 999);
     if (!data || data.length === 0) break;
     titles.push(...data);
     if (data.length < 1000) break;
   }
-  console.log(`대상 작품: ${titles.length}개`);
-
-  const { data: existing } = await supabase.from("series_products").select("title_id");
-  const alreadyMatched = new Set((existing ?? []).map((r) => r.title_id));
-  const targets = titles.filter((t) => !alreadyMatched.has(t.title_id));
-  console.log(`이미 매칭된 것 제외: ${targets.length}개 처리`);
+  console.log(`대상 작품(미확인): ${titles.length}개`);
 
   const limit = pLimit(4);
   const results: MatchResult[] = [];
   let done = 0;
 
   await Promise.all(
-    targets.map((t) =>
+    titles.map((t) =>
       limit(async () => {
         try {
-          const productNo = await findProductNo(t.title_name);
-          if (!productNo) {
-            results.push({ titleId: t.title_id, titleName: t.title_name, status: "no_candidate" });
-            return;
-          }
-          const pageHtml = await fetchWithRetry(
-            `https://series.naver.com/comic/detail.series?productNo=${productNo}`
-          );
-          const titleMatch = pageHtml.match(/<title>([^<]*)<\/title>/);
-          const seriesTitle = titleMatch ? titleMatch[1].trim() : "";
-          if (normalize(seriesTitle) === normalize(t.title_name)) {
+          const match = await findMatchingSeriesProduct(t.title_name);
+          if (match) {
             results.push({
               titleId: t.title_id,
               titleName: t.title_name,
               status: "matched",
-              productNo,
-              seriesTitle,
+              productNo: match.productNo,
+              seriesTitle: match.seriesTitle,
             });
           } else {
-            results.push({
-              titleId: t.title_id,
-              titleName: t.title_name,
-              status: "title_mismatch",
-              productNo,
-              seriesTitle,
-            });
+            results.push({ titleId: t.title_id, titleName: t.title_name, status: "no_candidate_or_mismatch" });
           }
         } catch (err) {
-          results.push({
-            titleId: t.title_id,
-            titleName: t.title_name,
-            status: "error",
-            error: String(err),
-          });
+          results.push({ titleId: t.title_id, titleName: t.title_name, status: "error", error: String(err) });
         } finally {
           done++;
-          if (done % 50 === 0) console.log(`  진행: ${done}/${targets.length}`);
+          if (done % 50 === 0) console.log(`  진행: ${done}/${titles.length}`);
         }
       })
     )
   );
 
   const matched = results.filter((r) => r.status === "matched");
-  const uncertain = results.filter((r) => r.status !== "matched");
-  console.log(`매칭 성공: ${matched.length}개, 검토 필요: ${uncertain.length}개`);
+  const noMatch = results.filter((r) => r.status === "no_candidate_or_mismatch");
+  const errored = results.filter((r) => r.status === "error");
+  console.log(`매칭 성공: ${matched.length}개, 매칭 안 됨: ${noMatch.length}개, 조회 실패: ${errored.length}개`);
 
   if (matched.length > 0) {
     const productRows = matched.map((m) => ({
@@ -175,10 +120,23 @@ async function main() {
     console.log(`다운로드수 ${snapshotRows.length}건 저장 완료`);
   }
 
+  // 매칭 성공/실패(no_candidate_or_mismatch) 둘 다 "시도했음"으로 표시해서 매일 밤 자동 매칭이
+  // 이미 결론 난 작품을 반복해서 재시도하지 않게 함. 네트워크 오류(error)는 표시하지 않고 남겨서
+  // 다음 실행(수동이든 자동이든) 때 다시 시도되게 함.
+  const checkedIds = [...matched, ...noMatch].map((r) => r.titleId);
+  for (let i = 0; i < checkedIds.length; i += 500) {
+    const batch = checkedIds.slice(i, i + 500);
+    const { error } = await supabase
+      .from("titles")
+      .update({ series_match_checked_at: new Date().toISOString() })
+      .in("title_id", batch);
+    if (error) console.error("series_match_checked_at 갱신 실패:", error.message);
+  }
+
   const fs = await import("fs");
-  fs.writeFileSync("series_match_uncertain.json", JSON.stringify(uncertain, null, 2));
+  fs.writeFileSync("series_match_no_match.json", JSON.stringify(noMatch, null, 2));
   fs.writeFileSync("series_match_matched.json", JSON.stringify(matched, null, 2));
-  console.log("완료. uncertain 목록: series_match_uncertain.json");
+  console.log("완료. 매칭 안 된 목록: series_match_no_match.json");
 }
 
 main().catch((err) => {

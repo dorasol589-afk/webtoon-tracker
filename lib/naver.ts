@@ -134,6 +134,46 @@ function parseKoreanCount(text: string): number | null {
   return Math.round(total);
 }
 
+function normalizeTitleForMatch(s: string): string {
+  return s
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/\s+/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+export interface SeriesMatchResult {
+  productNo: number;
+  seriesTitle: string;
+}
+
+/**
+ * comic.naver.com 작품명으로 네이버 시리즈(series.naver.com)에서 동일 작품을 검색해 찾는다.
+ * 제목이 정확히 일치하는 경우만 반환하고(괄호/공백 제거 후 비교), 후보가 없거나 제목이
+ * 다르면 null - 잘못된 작품에 다운로드수를 연결하는 사고를 막기 위해 애매한 매칭은 버림.
+ * search.naver.com(통합검색)은 자동화된 요청을 봇으로 감지해 403으로 막아버리는 걸 확인해서
+ * (series.naver.com은 그동안 다운로드수 조회로 매일 두드려도 문제 없었음),
+ * 시리즈 사이트 자체의 검색 페이지(series.naver.com/search/search.series)를 대신 쓴다.
+ * scripts/matchSeries.ts(전체 백필)와 scripts/collect.ts(신작 자동 매칭)가 공유해서 쓴다.
+ */
+export async function findMatchingSeriesProduct(titleName: string): Promise<SeriesMatchResult | null> {
+  const q = encodeURIComponent(titleName);
+  const html = await fetchTextWithRetry(`https://series.naver.com/search/search.series?t=comic&q=${q}`, {
+    headers: { "User-Agent": USER_AGENT },
+  });
+  const matches = [...html.matchAll(/comic\/detail\.series\?productNo=(\d+)/g)];
+  if (matches.length === 0) return null;
+  const productNo = parseInt(matches[0][1], 10);
+  const pageHtml = await fetchTextWithRetry(`https://series.naver.com/comic/detail.series?productNo=${productNo}`, {
+    headers: { "User-Agent": USER_AGENT },
+  });
+  const titleMatch = pageHtml.match(/<title>([^<]*)<\/title>/);
+  const seriesTitle = titleMatch ? titleMatch[1].trim() : "";
+  if (normalizeTitleForMatch(seriesTitle) !== normalizeTitleForMatch(titleName)) return null;
+  return { productNo, seriesTitle };
+}
+
 /** 네이버 시리즈 작품의 누적 다운로드수 (productNo는 series.naver.com/comic/detail.series?productNo=X 의 X) */
 export async function fetchSeriesDownloadCount(productNo: number): Promise<number> {
   const html = await fetchTextWithRetry(
@@ -200,8 +240,11 @@ export async function fetchAllFinishedTitles(): Promise<TitleListItem[]> {
  * 이 맵 API는 매일+(dailyPlus)를 포함하지 않으므로, week=dailyPlus&order=X를 별도로 불러
  * weekday="DAILY_PLUS"로 합쳐준다. 요일(또는 매일+) 그룹 안에서만 유효한 순위이며,
  * 네이버가 플랫폼 전체를 아우르는 단일 랭킹은 제공하지 않음.
+ * 화/금처럼 이틀 이상 연재하는 작품은 요일마다 순위가 다르므로 title당 배열로 반환한다
+ * (응답의 요일 키 순서가 월~일 순이 아니라서, title당 값 하나만 저장하면 나중 요일에 덮어써져
+ * 먼저 처리된 요일의 순위가 사라지는 버그가 있었음).
  */
-export async function fetchWeekdayRankMap(order: RankOrder): Promise<Map<number, RankInfo>> {
+export async function fetchWeekdayRankMap(order: RankOrder): Promise<Map<number, RankInfo[]>> {
   const [mapData, dailyPlusData] = await Promise.all([
     fetchJsonWithRetry<{ titleListMap: Record<string, TitleListItem[]> }>(
       `https://comic.naver.com/api/webtoon/titlelist/weekday?order=${order}`,
@@ -212,14 +255,19 @@ export async function fetchWeekdayRankMap(order: RankOrder): Promise<Map<number,
       { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
     ),
   ]);
-  const result = new Map<number, RankInfo>();
+  const result = new Map<number, RankInfo[]>();
+  const push = (titleId: number, info: RankInfo) => {
+    const list = result.get(titleId);
+    if (list) list.push(info);
+    else result.set(titleId, [info]);
+  };
   for (const [weekday, titles] of Object.entries(mapData.titleListMap)) {
     titles.forEach((t, i) => {
-      result.set(t.titleId, { weekday, rank: i + 1 });
+      push(t.titleId, { weekday, rank: i + 1 });
     });
   }
   dailyPlusData.titleList.forEach((t, i) => {
-    result.set(t.titleId, { weekday: "DAILY_PLUS", rank: i + 1 });
+    push(t.titleId, { weekday: "DAILY_PLUS", rank: i + 1 });
   });
   return result;
 }

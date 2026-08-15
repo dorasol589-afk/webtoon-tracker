@@ -15,6 +15,7 @@ import {
   fetchCommentStats,
   fetchWeekdayRankMap,
   fetchSeriesDownloadCount,
+  findMatchingSeriesProduct,
   fetchRealtimeRanking,
   findLastEpisodeNoViaComments,
   fetchTitleInfo,
@@ -190,16 +191,19 @@ async function main() {
     fetchWeekdayRankMap("view"),
   ]);
   if (supabase) {
+    // title_snapshots는 작품당 하루 1행이라 대표 요일 하나만 담김(다른 페이지의 "요일" 배지용).
+    // 화/금처럼 여러 요일 연재작의 요일별 정확한 순위는 아래 title_weekday_ranks에 전부 저장함.
     const titleSnapshotRows = titles.map((t) => {
-      const rankInfo = popularityRanks.get(t.titleId) ?? ratingRanks.get(t.titleId) ?? viewRanks.get(t.titleId);
+      const rankInfo =
+        popularityRanks.get(t.titleId)?.[0] ?? ratingRanks.get(t.titleId)?.[0] ?? viewRanks.get(t.titleId)?.[0];
       return {
         title_id: t.titleId,
         snapshot_date: snapshotDate,
         star_score: t.starScore,
         weekday: rankInfo?.weekday ?? null,
-        popularity_rank: popularityRanks.get(t.titleId)?.rank ?? null,
-        rating_rank: ratingRanks.get(t.titleId)?.rank ?? null,
-        view_rank: viewRanks.get(t.titleId)?.rank ?? null,
+        popularity_rank: popularityRanks.get(t.titleId)?.[0]?.rank ?? null,
+        rating_rank: ratingRanks.get(t.titleId)?.[0]?.rank ?? null,
+        view_rank: viewRanks.get(t.titleId)?.[0]?.rank ?? null,
       };
     });
     for (const batch of chunk(titleSnapshotRows, 500)) {
@@ -209,6 +213,43 @@ async function main() {
       if (error) console.error("  title_snapshots upsert 실패:", error.message);
     }
     console.log(`  title_snapshots ${titleSnapshotRows.length}건 저장 완료`);
+
+    // 요일마다 순위가 다르므로(같은 작품이라도 화요일 랭킹과 금요일 랭킹은 별개) 작품×요일 단위로 전부 저장
+    const weekdayRankRows: {
+      title_id: number;
+      snapshot_date: string;
+      weekday: string;
+      popularity_rank: number | null;
+      rating_rank: number | null;
+      view_rank: number | null;
+    }[] = [];
+    for (const t of titles) {
+      const byWeekday = new Map<
+        string,
+        { popularity_rank: number | null; rating_rank: number | null; view_rank: number | null }
+      >();
+      const ensure = (wd: string) => {
+        let entry = byWeekday.get(wd);
+        if (!entry) {
+          entry = { popularity_rank: null, rating_rank: null, view_rank: null };
+          byWeekday.set(wd, entry);
+        }
+        return entry;
+      };
+      for (const r of popularityRanks.get(t.titleId) ?? []) ensure(r.weekday).popularity_rank = r.rank;
+      for (const r of ratingRanks.get(t.titleId) ?? []) ensure(r.weekday).rating_rank = r.rank;
+      for (const r of viewRanks.get(t.titleId) ?? []) ensure(r.weekday).view_rank = r.rank;
+      for (const [weekday, ranks] of byWeekday) {
+        weekdayRankRows.push({ title_id: t.titleId, snapshot_date: snapshotDate, weekday, ...ranks });
+      }
+    }
+    for (const batch of chunk(weekdayRankRows, 500)) {
+      const { error } = await supabase
+        .from("title_weekday_ranks")
+        .upsert(batch, { onConflict: "title_id,snapshot_date,weekday" });
+      if (error) console.error("  title_weekday_ranks upsert 실패:", error.message);
+    }
+    console.log(`  title_weekday_ranks ${weekdayRankRows.length}건 저장 완료`);
   }
 
   console.log(`[4/10] 실시간 랭킹(인기/신작 × 전체/남성/여성 TOP5) 조회...`);
@@ -373,14 +414,71 @@ async function main() {
     }
   }
 
-  console.log(`[8/10] 네이버 시리즈 다운로드수 수집 (우선 추적 5개 + 매칭된 전체)...`);
+  console.log(`[8/10] 신작 시리즈 자동 매칭 + 네이버 시리즈 다운로드수 수집 (우선 추적 5개 + 매칭된 전체)...`);
+  // 시리즈 매칭을 아직 시도해본 적 없는(series_match_checked_at이 null인) 작품만 새로 시도.
+  // 신작이 매일 생기므로 이 단계가 매일 조금씩 돌면서 자동으로 시리즈에 연결해준다.
+  // 성공/실패 상관없이 시도했으면 checked_at을 찍어서 매번 똑같이 실패하는 작품을 계속
+  // 재검색하지 않게 함(네트워크 오류로 시도 자체가 실패한 건 checked_at을 찍지 않고 다음날 재시도).
+  if (supabase) {
+    // 완결작은 다운로드수 추적 대상이 아니므로 애초에 매칭 시도도 하지 않음
+    const { data: unchecked } = await supabase
+      .from("titles")
+      .select("title_id,title_name")
+      .eq("is_active", true)
+      .eq("is_finished", false)
+      .is("series_match_checked_at", null);
+    if (unchecked && unchecked.length > 0) {
+      console.log(`  시리즈 미확인 작품 ${unchecked.length}개 자동 매칭 시도...`);
+      const matchLimit = pLimit(4);
+      let newlyMatched = 0;
+      const checkedIds: number[] = [];
+      await Promise.all(
+        unchecked.map((t) =>
+          matchLimit(async () => {
+            try {
+              const match = await findMatchingSeriesProduct(t.title_name);
+              if (match) {
+                const { error } = await supabase!.from("series_products").upsert(
+                  { product_no: match.productNo, title_id: t.title_id, series_title_name: match.seriesTitle },
+                  { onConflict: "product_no" }
+                );
+                if (error) console.error(`  series_products 저장 실패 (${t.title_name}):`, error.message);
+                else newlyMatched++;
+              }
+              checkedIds.push(t.title_id);
+            } catch (err) {
+              console.error(`  시리즈 매칭 시도 실패 (${t.title_name}):`, err);
+            }
+          })
+        )
+      );
+      for (const batch of chunk(checkedIds, 500)) {
+        const { error } = await supabase
+          .from("titles")
+          .update({ series_match_checked_at: new Date().toISOString() })
+          .in("title_id", batch);
+        if (error) console.error("  series_match_checked_at 갱신 실패:", error.message);
+      }
+      console.log(`  신규 매칭 ${newlyMatched}개 (확인 완료 ${checkedIds.length}/${unchecked.length}개)`);
+    }
+  }
+
   const seriesTargets = new Map<number, { titleId: number; name: string }>();
   for (const item of SERIES_WATCHLIST) {
     seriesTargets.set(item.productNo, { titleId: item.titleId, name: item.name });
   }
   if (supabase) {
+    // 완결작은 다운로드수 추적 대상에서 제외 (연재중/휴재중만) - 매칭된 뒤에 완결되는 경우도 있어
+    // series_products가 아니라 titles.is_finished 기준으로 매번 걸러냄
+    const { data: nonFinished } = await supabase
+      .from("titles")
+      .select("title_id")
+      .eq("is_active", true)
+      .eq("is_finished", false);
+    const nonFinishedIds = new Set((nonFinished ?? []).map((t) => t.title_id));
     const { data: products } = await supabase.from("series_products").select("product_no,title_id,series_title_name");
     for (const p of products ?? []) {
+      if (!nonFinishedIds.has(p.title_id)) continue;
       if (!seriesTargets.has(p.product_no)) {
         seriesTargets.set(p.product_no, { titleId: p.title_id, name: p.series_title_name });
       }

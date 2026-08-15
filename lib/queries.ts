@@ -1,5 +1,6 @@
 import { getSupabaseAnon } from "./supabase";
 import { SERIES_WATCHLIST } from "./seriesWatchlist";
+import { fetchRealtimeRanking } from "./naver";
 
 export interface TitleRow {
   title_id: number;
@@ -339,6 +340,40 @@ export async function getRealtimeRanking(
     return {
       rank: r.rank,
       title_id: r.title_id,
+      title_name: title?.title_name ?? "",
+      thumbnail_url: title?.thumbnail_url ?? null,
+    };
+  });
+}
+
+/**
+ * 네이버 실시간 랭킹 TOP5를 매번 네이버에서 직접 가져옴(DB 스냅샷 아님).
+ * "실시간" 랭킹은 네이버 쪽에서 하루에도 여러 번 바뀌는데 수집기는 새벽 3:10에 한 번만 찍어서
+ * 낮에 보면 항상 어제 새벽 기준으로 멈춰 보였음 - 홈 화면에서는 매 요청마다 최신값을 보여주려고
+ * DB 대신 실시간 API를 직접 호출한다(과거 추이 저장용 realtime_ranking_snapshots는 그대로 유지).
+ */
+export async function getRealtimeRankingLive(
+  category: RealtimeRankCategory,
+  rankTabType: RealtimeRankTabType = "DEFAULT"
+): Promise<RealtimeRankRow[]> {
+  const ranking = await fetchRealtimeRanking(rankTabType);
+  const items = ranking[category];
+  if (items.length === 0) return [];
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("titles")
+    .select("title_id,title_name,thumbnail_url")
+    .in(
+      "title_id",
+      items.map((i) => i.titleId)
+    );
+  if (error) throw error;
+  const titleMap = new Map((data ?? []).map((t) => [t.title_id, t]));
+  return items.map((item) => {
+    const title = titleMap.get(item.titleId);
+    return {
+      rank: item.rank,
+      title_id: item.titleId,
       title_name: title?.title_name ?? "",
       thumbnail_url: title?.thumbnail_url ?? null,
     };
