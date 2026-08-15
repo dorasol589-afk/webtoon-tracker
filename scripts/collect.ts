@@ -65,6 +65,30 @@ function dedupeBy<T>(arr: T[], keyFn: (item: T) => string): T[] {
   return [...map.values()];
 }
 
+// Supabase(PostgREST)는 명시적 range 없이 select하면 기본 1000행으로 잘라서 반환한다.
+// 대상 테이블이 1000행을 넘어가면 뒤쪽 행이 조용히 누락되므로(에러 없이!), 전체를 읽어야 하는
+// 곳은 반드시 이 헬퍼로 페이지네이션해야 함 - series_products/titles 조회에서 실제로 이 문제로
+// 162개 작품의 다운로드수 수집이 누락된 적 있음.
+async function fetchAllRows<T>(
+  supabase: ReturnType<typeof import("../lib/supabase").getSupabaseAdmin>,
+  table: string,
+  select: string,
+  build?: (q: any) => any
+): Promise<T[]> {
+  const all: T[] = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    let q = supabase.from(table).select(select).range(from, from + pageSize - 1);
+    if (build) q = build(q);
+    const { data, error } = await q;
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...(data as T[]));
+    if (data.length < pageSize) break;
+  }
+  return all;
+}
+
 async function main() {
   const startedAt = Date.now();
   const titleLimit = process.env.TITLE_LIMIT ? parseInt(process.env.TITLE_LIMIT, 10) : undefined;
@@ -421,12 +445,12 @@ async function main() {
   // 재검색하지 않게 함(네트워크 오류로 시도 자체가 실패한 건 checked_at을 찍지 않고 다음날 재시도).
   if (supabase) {
     // 완결작은 다운로드수 추적 대상이 아니므로 애초에 매칭 시도도 하지 않음
-    const { data: unchecked } = await supabase
-      .from("titles")
-      .select("title_id,title_name")
-      .eq("is_active", true)
-      .eq("is_finished", false)
-      .is("series_match_checked_at", null);
+    const unchecked = await fetchAllRows<{ title_id: number; title_name: string }>(
+      supabase,
+      "titles",
+      "title_id,title_name",
+      (q) => q.eq("is_active", true).eq("is_finished", false).is("series_match_checked_at", null)
+    );
     if (unchecked && unchecked.length > 0) {
       console.log(`  시리즈 미확인 작품 ${unchecked.length}개 자동 매칭 시도...`);
       const matchLimit = pLimit(4);
@@ -470,14 +494,16 @@ async function main() {
   if (supabase) {
     // 완결작은 다운로드수 추적 대상에서 제외 (연재중/휴재중만) - 매칭된 뒤에 완결되는 경우도 있어
     // series_products가 아니라 titles.is_finished 기준으로 매번 걸러냄
-    const { data: nonFinished } = await supabase
-      .from("titles")
-      .select("title_id")
-      .eq("is_active", true)
-      .eq("is_finished", false);
-    const nonFinishedIds = new Set((nonFinished ?? []).map((t) => t.title_id));
-    const { data: products } = await supabase.from("series_products").select("product_no,title_id,series_title_name");
-    for (const p of products ?? []) {
+    const nonFinished = await fetchAllRows<{ title_id: number }>(supabase, "titles", "title_id", (q) =>
+      q.eq("is_active", true).eq("is_finished", false)
+    );
+    const nonFinishedIds = new Set(nonFinished.map((t) => t.title_id));
+    const products = await fetchAllRows<{ product_no: number; title_id: number; series_title_name: string }>(
+      supabase,
+      "series_products",
+      "product_no,title_id,series_title_name"
+    );
+    for (const p of products) {
       if (!nonFinishedIds.has(p.title_id)) continue;
       if (!seriesTargets.has(p.product_no)) {
         seriesTargets.set(p.product_no, { titleId: p.title_id, name: p.series_title_name });
