@@ -8,11 +8,13 @@ export default function TreatmentCell({
   no,
   initialValue,
   rows = 2,
+  readOnly = false,
 }: {
   titleId: number;
   no: number;
   initialValue: string | null;
   rows?: number;
+  readOnly?: boolean;
 }) {
   const [value, setValue] = useState(initialValue ?? "");
   const [savedValue, setSavedValue] = useState(initialValue ?? "");
@@ -28,6 +30,14 @@ export default function TreatmentCell({
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 1500);
     });
+  }
+
+  if (readOnly) {
+    return (
+      <p className="w-full whitespace-pre-wrap rounded border border-neutral-100 bg-neutral-50 px-2 py-1 text-xs text-neutral-600">
+        {initialValue || <span className="text-neutral-300">-</span>}
+      </p>
+    );
   }
 
   return (

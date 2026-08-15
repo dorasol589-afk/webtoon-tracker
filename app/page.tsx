@@ -22,6 +22,7 @@ import {
 import TagStatsChart from "./TagStatsChart";
 import StudioNameEditor from "./StudioNameEditor";
 import { formatManwon } from "@/lib/format";
+import { hasAdminAccess } from "@/lib/supabase";
 
 const GENDER_TABS: { value: RealtimeRankCategory; label: string }[] = [
   { value: "TOTAL", label: "전체" },
@@ -150,6 +151,7 @@ export default async function HomePage({
 }) {
   const { q, weekday, gender } = await searchParams;
   const result = await loadData(q, weekday, gender);
+  const readOnly = !hasAdminAccess();
 
   return (
     <div>
@@ -237,7 +239,7 @@ export default async function HomePage({
                       )}
                       <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
                     </Link>
-                    <StudioNameEditor titleId={t.title_id} studioName={t.studio_name} />
+                    <StudioNameEditor titleId={t.title_id} studioName={t.studio_name} readOnly={readOnly} />
                   </div>
                 ))}
               </div>
@@ -266,7 +268,7 @@ export default async function HomePage({
                       )}
                       <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
                     </Link>
-                    <StudioNameEditor titleId={t.title_id} studioName={t.studio_name} />
+                    <StudioNameEditor titleId={t.title_id} studioName={t.studio_name} readOnly={readOnly} />
                   </div>
                 ))}
               </div>

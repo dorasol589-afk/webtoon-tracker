@@ -8,15 +8,21 @@ const NEEDS_FIX = new Set(["다중", "", null, undefined]);
 export default function StudioNameEditor({
   titleId,
   studioName,
+  readOnly = false,
 }: {
   titleId: number;
   studioName: string | null;
+  readOnly?: boolean;
 }) {
   const needsFix = NEEDS_FIX.has(studioName ?? "");
-  const [editing, setEditing] = useState(needsFix);
+  const [editing, setEditing] = useState(needsFix && !readOnly);
   const [value, setValue] = useState(needsFix ? "" : studioName ?? "");
   const [saved, setSaved] = useState(studioName);
   const [isPending, startTransition] = useTransition();
+
+  if (readOnly) {
+    return <span className="truncate text-xs text-neutral-400">{saved}</span>;
+  }
 
   if (!editing) {
     return (

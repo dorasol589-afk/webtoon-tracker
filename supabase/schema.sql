@@ -284,13 +284,9 @@ create policy "titles are publicly readable"
   on titles for select
   using (true);
 
--- 홈 화면 "이번주 신작"에서 제작사명(다중/빈값)을 직접 고칠 수 있게 anon 업데이트 허용
--- (앱 코드에서는 studio_name 컬럼만 갱신함)
+-- 제작사명 등 수정은 앱이 service role(관리자 전용, 로컬에서만 키가 있음)로만 하도록
+-- anon 쓰기 정책을 없앰 - 공유 배포 주소에서는 API를 직접 두드려도 수정이 안 되게 하기 위함.
 drop policy if exists "titles studio_name is publicly updatable" on titles;
-create policy "titles studio_name is publicly updatable"
-  on titles for update
-  using (true)
-  with check (true);
 
 drop policy if exists "episodes are publicly readable" on episodes;
 create policy "episodes are publicly readable"
@@ -350,56 +346,32 @@ create policy "title_tags are publicly readable"
 
 -- service_role 키는 RLS를 우회하므로 쓰기용 정책은 별도로 필요 없음 (수집기는 service role key 사용)
 
--- episode_notes는 예외: 대시보드(anon key)에서 사용자가 직접 트리트먼트를 쓰고 저장해야 하므로
--- 이 테이블만 anon에게 읽기/쓰기를 모두 허용함 (로그인 기능이 없는 개인용 대시보드 전제)
+-- episode_notes/title_notes/job_posting_applications: anon에게는 읽기만 허용.
+-- 쓰기는 대시보드가 service role(로컬 전용 키)로만 하도록 앱 코드에서 강제함 - 공유 배포
+-- 주소에는 이 키를 넣지 않아서 API를 직접 두드려도 수정이 안 됨.
 drop policy if exists "episode_notes are publicly readable" on episode_notes;
 create policy "episode_notes are publicly readable"
   on episode_notes for select
   using (true);
 
+-- 쓰기(insert/update/delete)는 이제 anon 정책을 두지 않음: 앱은 service role(로컬 전용 키)로만
+-- 쓰고, 공유 배포 주소에서는 이 테이블들에 읽기만 되고 API를 직접 두드려도 수정이 안 됨.
 drop policy if exists "episode_notes are publicly writable" on episode_notes;
-create policy "episode_notes are publicly writable"
-  on episode_notes for insert
-  with check (true);
-
 drop policy if exists "episode_notes are publicly updatable" on episode_notes;
-create policy "episode_notes are publicly updatable"
-  on episode_notes for update
-  using (true)
-  with check (true);
 
--- title_notes도 episode_notes와 동일하게 anon 읽기/쓰기 허용 (배포 후 소유자 전용으로 잠글 예정)
 drop policy if exists "title_notes are publicly readable" on title_notes;
 create policy "title_notes are publicly readable"
   on title_notes for select
   using (true);
-
 drop policy if exists "title_notes are publicly writable" on title_notes;
-create policy "title_notes are publicly writable"
-  on title_notes for insert
-  with check (true);
-
 drop policy if exists "title_notes are publicly updatable" on title_notes;
-create policy "title_notes are publicly updatable"
-  on title_notes for update
-  using (true)
-  with check (true);
 
--- job_posting_applications도 동일 (지원 여부 체크는 존재/삭제로 표시하므로 select/insert/delete만 필요)
 drop policy if exists "job_posting_applications are publicly readable" on job_posting_applications;
 create policy "job_posting_applications are publicly readable"
   on job_posting_applications for select
   using (true);
-
 drop policy if exists "job_posting_applications are publicly writable" on job_posting_applications;
-create policy "job_posting_applications are publicly writable"
-  on job_posting_applications for insert
-  with check (true);
-
 drop policy if exists "job_posting_applications are publicly deletable" on job_posting_applications;
-create policy "job_posting_applications are publicly deletable"
-  on job_posting_applications for delete
-  using (true);
 
 -- 대시보드용 헬퍼 함수 (anon 키로 호출, RPC)
 

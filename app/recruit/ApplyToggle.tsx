@@ -7,10 +7,12 @@ export default function ApplyToggle({
   source,
   postingId,
   initialApplied,
+  readOnly = false,
 }: {
   source: string;
   postingId: string;
   initialApplied: boolean;
+  readOnly?: boolean;
 }) {
   const [applied, setApplied] = useState(initialApplied);
   const [isPending, startTransition] = useTransition();
@@ -21,6 +23,18 @@ export default function ApplyToggle({
     startTransition(async () => {
       await setJobAppliedAction(source, postingId, next);
     });
+  }
+
+  if (readOnly) {
+    return (
+      <span
+        className={`shrink-0 rounded px-2 py-0.5 text-xs ${
+          applied ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-400"
+        }`}
+      >
+        {applied ? "✓ 지원함" : "미지원"}
+      </span>
+    );
   }
 
   return (

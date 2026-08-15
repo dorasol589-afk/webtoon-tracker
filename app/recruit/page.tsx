@@ -1,4 +1,5 @@
 import { getActiveJobPostingsByStudio } from "@/lib/queries";
+import { hasAdminAccess } from "@/lib/supabase";
 import RecruitSearch from "./RecruitSearch";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export default async function RecruitPage() {
         </div>
       )}
 
-      {!loadError && <RecruitSearch groups={groups} />}
+      {!loadError && <RecruitSearch groups={groups} readOnly={!hasAdminAccess()} />}
     </div>
   );
 }

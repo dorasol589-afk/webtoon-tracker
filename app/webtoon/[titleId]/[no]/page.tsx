@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getTitle, getEpisode, getEpisodeHistory, getEpisodeTreatment } from "@/lib/queries";
+import { hasAdminAccess } from "@/lib/supabase";
 import CommentTrendChart from "./CommentTrendChart";
 import TreatmentCell from "../TreatmentCell";
 
@@ -47,7 +48,7 @@ export default async function EpisodePage({
 
       <div className="mt-6">
         <h2 className="mb-2 text-sm font-semibold text-neutral-500">트리트먼트</h2>
-        <TreatmentCell titleId={id} no={episodeNo} initialValue={treatment} rows={6} />
+        <TreatmentCell titleId={id} no={episodeNo} initialValue={treatment} rows={6} readOnly={!hasAdminAccess()} />
       </div>
     </div>
   );

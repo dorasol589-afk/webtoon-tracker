@@ -1,6 +1,13 @@
-import { getSupabaseAnon } from "./supabase";
+import { getSupabaseAnon, getSupabaseAdmin, hasAdminAccess } from "./supabase";
 import { SERIES_WATCHLIST } from "./seriesWatchlist";
 import { fetchRealtimeRanking } from "./naver";
+
+/** 쓰기 함수 공용 가드: 공유 배포(service role key 없음)에서는 수정 자체가 불가능해야 함 */
+function assertAdminAccess() {
+  if (!hasAdminAccess()) {
+    throw new Error("읽기 전용 배포에서는 수정할 수 없습니다. 로컬(localhost)에서 수정해주세요.");
+  }
+}
 
 export interface TitleRow {
   title_id: number;
@@ -121,7 +128,8 @@ export async function getEpisodesWithLatestCount(titleId: number): Promise<Episo
 
 /** 회차별 트리트먼트(내용 메모) 저장 - 대시보드에서 사용자가 직접 입력 */
 export async function saveEpisodeTreatment(titleId: number, no: number, treatment: string): Promise<void> {
-  const supabase = getSupabaseAnon();
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
   const { error } = await supabase
     .from("episode_notes")
     .upsert(
@@ -156,7 +164,8 @@ export async function getTitleNotes(titleId: number): Promise<TitleNotes> {
 
 /** 작품 단위 로그라인/소재/타깃층 저장 - 대시보드에서 사용자가 직접 입력 */
 export async function saveTitleNotes(titleId: number, notes: TitleNotes): Promise<void> {
-  const supabase = getSupabaseAnon();
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
   const { error } = await supabase
     .from("title_notes")
     .upsert(
@@ -593,7 +602,8 @@ export async function getTitlesLaunchedThisWeek(): Promise<TitleListRow[]> {
 
 /** 제작사명 직접 수정 - 홈 화면에서 다중/빈값 바로 고치기용 */
 export async function updateTitleStudioName(titleId: number, studioName: string): Promise<void> {
-  const supabase = getSupabaseAnon();
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
   const { error } = await supabase
     .from("titles")
     .update({ studio_name: studioName || null })
@@ -776,7 +786,8 @@ export async function getActiveJobPostingsByStudio(): Promise<ActiveJobPostingGr
 
 /** 채용공고 지원 여부 토글(존재 = 지원함) */
 export async function setJobApplied(source: string, postingId: string, applied: boolean): Promise<void> {
-  const supabase = getSupabaseAnon();
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
   if (applied) {
     const { error } = await supabase
       .from("job_posting_applications")

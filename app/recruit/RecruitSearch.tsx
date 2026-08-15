@@ -14,7 +14,13 @@ const SOURCE_LABEL: Record<string, string> = {
 type SortBy = "studio" | "deadline";
 type FlatPosting = JobPostingRow & { studioName: string };
 
-export default function RecruitSearch({ groups }: { groups: ActiveJobPostingGroup[] }) {
+export default function RecruitSearch({
+  groups,
+  readOnly = false,
+}: {
+  groups: ActiveJobPostingGroup[];
+  readOnly?: boolean;
+}) {
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("studio");
 
@@ -89,7 +95,7 @@ export default function RecruitSearch({ groups }: { groups: ActiveJobPostingGrou
                 <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
                   {SOURCE_LABEL[p.source] ?? p.source}
                 </span>
-                <ApplyToggle source={p.source} postingId={p.postingId} initialApplied={p.applied} />
+                <ApplyToggle source={p.source} postingId={p.postingId} initialApplied={p.applied} readOnly={readOnly} />
               </span>
             </li>
           ))}

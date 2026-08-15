@@ -11,6 +11,7 @@ import {
 import SeriesDownloadChart from "./SeriesDownloadChart";
 import TitleNotesForm from "./TitleNotesForm";
 import StudioNameEditor from "@/app/StudioNameEditor";
+import { hasAdminAccess } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ export default async function TitlePage({
   const { tab } = await searchParams;
   const id = Number(titleId);
   if (!Number.isInteger(id)) notFound();
+  const readOnly = !hasAdminAccess();
 
   const title = await getTitle(id);
   if (!title) notFound();
@@ -97,7 +99,7 @@ export default async function TitlePage({
           )}
           <div className="mt-1 flex items-center gap-1 text-sm text-neutral-500">
             제작사:
-            <StudioNameEditor titleId={id} studioName={title.studio_name} />
+            <StudioNameEditor titleId={id} studioName={title.studio_name} readOnly={readOnly} />
             {title.studio_name && title.studio_website_url && (
               <a
                 href={title.studio_website_url}
@@ -143,7 +145,7 @@ export default async function TitlePage({
       </div>
 
       <div className="mb-6">
-        <TitleNotesForm titleId={id} initial={titleNotes} />
+        <TitleNotesForm titleId={id} initial={titleNotes} readOnly={readOnly} />
       </div>
 
       <div className="mb-4">
