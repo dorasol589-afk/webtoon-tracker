@@ -16,13 +16,16 @@ type FlatPosting = JobPostingRow & { studioName: string };
 
 export default function RecruitSearch({
   groups,
+  trackedStudios,
   readOnly = false,
 }: {
   groups: ActiveJobPostingGroup[];
+  trackedStudios: string[];
   readOnly?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("studio");
+  const [studioFilter, setStudioFilter] = useState("");
 
   const flat = useMemo<FlatPosting[]>(
     () => groups.flatMap((g) => g.postings.map((p) => ({ ...p, studioName: g.studioName }))),
@@ -31,20 +34,23 @@ export default function RecruitSearch({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const base = q
-      ? flat.filter((p) => p.studioName.toLowerCase().includes(q) || p.title.toLowerCase().includes(q))
-      : flat;
+    let base = studioFilter ? flat.filter((p) => p.studioName === studioFilter) : flat;
+    if (q) {
+      base = base.filter((p) => p.studioName.toLowerCase().includes(q) || p.title.toLowerCase().includes(q));
+    }
     return [...base].sort((a, b) => {
       if (sortBy === "deadline") {
         return ddayToDays(a.dday) - ddayToDays(b.dday) || a.studioName.localeCompare(b.studioName, "ko");
       }
       return a.studioName.localeCompare(b.studioName, "ko");
     });
-  }, [flat, query, sortBy]);
+  }, [flat, query, sortBy, studioFilter]);
+
+  const studiosWithPostings = useMemo(() => new Set(groups.map((g) => g.studioName)), [groups]);
 
   return (
     <div>
-      <div className="mb-6 flex gap-2">
+      <div className="mb-6 flex flex-wrap gap-2">
         <input
           type="text"
           value={query}
@@ -52,6 +58,19 @@ export default function RecruitSearch({
           placeholder="제작사명 또는 공고 제목으로 검색..."
           className="flex-1 rounded border border-neutral-200 px-3 py-2 text-sm focus:border-neutral-400 focus:outline-none"
         />
+        <select
+          value={studioFilter}
+          onChange={(e) => setStudioFilter(e.target.value)}
+          className="rounded border border-neutral-200 px-2 py-2 text-sm focus:border-neutral-400 focus:outline-none"
+        >
+          <option value="">수집 중인 제작사 전체 ({trackedStudios.length})</option>
+          {trackedStudios.map((name) => (
+            <option key={name} value={name}>
+              {name}
+              {studiosWithPostings.has(name) ? "" : " (공고 없음)"}
+            </option>
+          ))}
+        </select>
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as SortBy)}
@@ -62,11 +81,17 @@ export default function RecruitSearch({
         </select>
       </div>
 
-      {query && <p className="mb-4 text-sm text-neutral-400">{filtered.length.toLocaleString()}건 검색됨</p>}
+      {(query || studioFilter) && (
+        <p className="mb-4 text-sm text-neutral-400">{filtered.length.toLocaleString()}건 검색됨</p>
+      )}
 
       {filtered.length === 0 && (
         <p className="rounded-lg border border-neutral-200 bg-white p-4 text-sm text-neutral-500">
-          {query ? "검색 결과가 없습니다." : "현재 진행중인 공고가 없습니다."}
+          {studioFilter
+            ? `"${studioFilter}"는 수집 대상이지만 현재 진행중인 공고가 없습니다.`
+            : query
+              ? "검색 결과가 없습니다."
+              : "현재 진행중인 공고가 없습니다."}
         </p>
       )}
 

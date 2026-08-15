@@ -1,4 +1,4 @@
-import { getActiveJobPostingsByStudio } from "@/lib/queries";
+import { getActiveJobPostingsByStudio, getTrackedRecruitStudioNames } from "@/lib/queries";
 import { hasAdminAccess } from "@/lib/supabase";
 import RecruitSearch from "./RecruitSearch";
 
@@ -6,9 +6,10 @@ export const dynamic = "force-dynamic";
 
 export default async function RecruitPage() {
   let groups: Awaited<ReturnType<typeof getActiveJobPostingsByStudio>> = [];
+  let trackedStudios: string[] = [];
   let loadError = false;
   try {
-    groups = await getActiveJobPostingsByStudio();
+    [groups, trackedStudios] = await Promise.all([getActiveJobPostingsByStudio(), getTrackedRecruitStudioNames()]);
   } catch {
     loadError = true;
   }
@@ -19,7 +20,7 @@ export default async function RecruitPage() {
     <div>
       <h1 className="mb-1 text-lg font-semibold">채용공고</h1>
       <p className="mb-6 text-sm text-neutral-400">
-        {!loadError && `현재 진행중인 공고 ${totalCount.toLocaleString()}건`}
+        {!loadError && `현재 진행중인 공고 ${totalCount.toLocaleString()}건 · 수집 중인 제작사 ${trackedStudios.length}곳`}
       </p>
 
       {loadError && (
@@ -28,7 +29,9 @@ export default async function RecruitPage() {
         </div>
       )}
 
-      {!loadError && <RecruitSearch groups={groups} readOnly={!hasAdminAccess()} />}
+      {!loadError && (
+        <RecruitSearch groups={groups} trackedStudios={trackedStudios} readOnly={!hasAdminAccess()} />
+      )}
     </div>
   );
 }

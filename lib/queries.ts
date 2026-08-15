@@ -784,6 +784,18 @@ export async function getActiveJobPostingsByStudio(): Promise<ActiveJobPostingGr
   return [...groups.entries()].map(([studioName, postings]) => ({ studioName, postings }));
 }
 
+/** 채용공고를 실제로 수집 중인(사람인/잡코리아 링크가 등록된) 제작사 이름 목록 - 채용공고 탭 필터용.
+ * 여기 없는 제작사는 "공고가 없는" 게 아니라 애초에 수집 대상이 아닌 것이라 구분이 필요함. */
+export async function getTrackedRecruitStudioNames(): Promise<string[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("studio_recruit_links")
+    .select("studio_name")
+    .order("studio_name", { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((r) => r.studio_name);
+}
+
 /** 채용공고 지원 여부 토글(존재 = 지원함) */
 export async function setJobApplied(source: string, postingId: string, applied: boolean): Promise<void> {
   assertAdminAccess();
