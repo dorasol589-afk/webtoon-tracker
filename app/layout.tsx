@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "웹툰 댓글수 추적",
-  description: "네이버 웹툰 무료회차 댓글수를 매일 추적하는 대시보드",
+  description: "네이버웹툰 무료회차 댓글수, 카카오웹툰 조회수/좋아요수를 매일 추적하는 대시보드",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -32,7 +32,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             </Link>
             <nav className="flex gap-4 text-sm text-neutral-500">
               <Link href="/" className="hover:text-neutral-900">
-                홈
+                네이버웹툰
+              </Link>
+              <Link href="/kakao" className="hover:text-neutral-900">
+                카카오웹툰
               </Link>
               <Link href="/titles" className="hover:text-neutral-900">
                 전체 작품 리스트
@@ -48,7 +51,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         </header>
         <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">{children}</main>
         <footer className="border-t border-neutral-200 py-4 text-center text-xs text-neutral-400">
-          데이터 출처: 네이버 웹툰 (비공식) · 매일 자동 수집
+          데이터 출처: 네이버웹툰 · 카카오웹툰 (비공식) · 매일 자동 수집
         </footer>
       </body>
     </html>

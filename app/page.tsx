@@ -1,6 +1,6 @@
 import Link from "next/link";
 import {
-  searchTitles,
+  unifiedSearch,
   getSeriesWatchlistLatest,
   getWeekdayPopularityRanking,
   getRealtimeRankingLive,
@@ -8,7 +8,7 @@ import {
   getTitlesLaunchedThisWeek,
   getTitlesNeedingStudioFix,
   getTopTitlesByDownload,
-  type TitleRow,
+  type UnifiedSearchResult,
   type SeriesWatchRow,
   type PopularityRankRow,
   type Weekday,
@@ -77,7 +77,7 @@ function DeltaBadge({ delta }: { delta: number }) {
 
 type LoadResult =
   | { type: "error" }
-  | { type: "search"; titles: TitleRow[] }
+  | { type: "search"; results: UnifiedSearchResult[] }
   | {
       type: "rankings";
       realtimeRanking: RealtimeRankRow[];
@@ -100,7 +100,7 @@ async function loadData(
 ): Promise<LoadResult> {
   try {
     if (q) {
-      return { type: "search", titles: await searchTitles(q) };
+      return { type: "search", results: await unifiedSearch(q) };
     }
     const selectedWeekday = weekdayParam && isWeekday(weekdayParam) ? weekdayParam : getTodayWeekdayKST();
     const selectedGender = genderParam && isGenderCategory(genderParam) ? genderParam : "TOTAL";
@@ -160,7 +160,7 @@ export default async function HomePage({
           type="text"
           name="q"
           defaultValue={q ?? ""}
-          placeholder="작품명으로 검색..."
+          placeholder="작품명으로 검색... (카카오웹툰 결과도 함께 나와요)"
           className="w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none"
         />
       </form>
@@ -174,19 +174,19 @@ export default async function HomePage({
 
       {result.type === "search" && (
         <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
-          {result.titles.length === 0 && (
+          {result.results.length === 0 && (
             <li className="p-4 text-sm text-neutral-500">&quot;{q}&quot;에 대한 검색 결과가 없습니다.</li>
           )}
-          {result.titles.map((t) => (
-            <li key={t.title_id}>
+          {result.results.map((r) => (
+            <li key={`${r.platform}-${r.id}`}>
               <Link
-                href={`/webtoon/${t.title_id}`}
+                href={r.platform === "kakao" ? `/kakao/webtoon/${r.id}` : `/webtoon/${r.id}`}
                 className="flex items-center gap-3 p-3 hover:bg-neutral-50"
               >
-                {t.thumbnail_url && (
+                {r.thumbnailUrl && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={t.thumbnail_url}
+                    src={r.thumbnailUrl}
                     alt=""
                     width={56}
                     height={72}
@@ -195,19 +195,21 @@ export default async function HomePage({
                 )}
                 <div>
                   <div className="flex items-center gap-1.5 font-medium">
-                    {t.title_name}
-                    {t.is_new && (
-                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700">
-                        신작
-                      </span>
-                    )}
-                    {t.is_adult && (
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] ${
+                        r.platform === "kakao" ? "bg-yellow-100 text-yellow-800" : "bg-emerald-100 text-emerald-700"
+                      }`}
+                    >
+                      {r.platform === "kakao" ? "카카오" : "네이버"}
+                    </span>
+                    {r.titleName}
+                    {r.isAdult && (
                       <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700">
                         성인
                       </span>
                     )}
                   </div>
-                  <div className="text-sm text-neutral-500">{t.author}</div>
+                  <div className="text-sm text-neutral-500">{r.author}</div>
                 </div>
               </Link>
             </li>

@@ -175,8 +175,9 @@ export async function saveTitleNotes(titleId: number, notes: TitleNotes): Promis
   if (error) throw error;
 }
 
-export interface ExportTitleRow {
-  title_id: number;
+export interface ExportTitleRowUnified {
+  id: number;
+  platform: "naver" | "kakao";
   title_name: string;
   weekday: string | null;
   is_adult: boolean;
@@ -192,6 +193,8 @@ export interface ExportTitleRow {
   launch_date: string | null;
   total_comment_count: number | null;
   download_count: number | null;
+  view_count: number | null;
+  like_count: number | null;
   genre: string | null;
   subject: string | null;
   logline: string | null;
@@ -199,22 +202,23 @@ export interface ExportTitleRow {
   comment: string | null;
 }
 
-/** 전체 작품 엑셀 내보내기용 데이터 (연재중/완결 필터, 페이지네이션 없음) */
-export async function getExportTitlesData(opts: {
+/** 전체 작품 엑셀 내보내기용 데이터(네이버+카카오 통합, 플랫폼 필터 포함, 페이지네이션 없음) */
+export async function getExportTitlesDataUnified(opts: {
+  platform?: TitlePlatformFilter;
   status?: TitleStatusFilter;
   type?: TitleTypeFilter;
   adultOnly?: boolean;
   launchFrom?: string;
   launchTo?: string;
-  sortBy?: TitleSortBy;
-}): Promise<ExportTitleRow[]> {
+  sortBy?: TitleSortBy | "views" | "likes";
+}): Promise<ExportTitleRowUnified[]> {
   const supabase = getSupabaseAnon();
-  // PostgREST 기본 응답 상한(1000행)에 걸리지 않도록 페이지네이션해서 전체를 모음
   const PAGE_SIZE = 1000;
-  const all: ExportTitleRow[] = [];
+  const all: ExportTitleRowUnified[] = [];
   for (let offset = 0; ; offset += PAGE_SIZE) {
     const { data, error } = await supabase
-      .rpc("export_titles_data", {
+      .rpc("export_titles_data_unified", {
+        filter_platform: opts.platform ?? "all",
         filter_status: opts.status ?? "all",
         filter_type: opts.type ?? "all",
         filter_adult_only: opts.adultOnly ?? false,
@@ -224,7 +228,7 @@ export async function getExportTitlesData(opts: {
       })
       .range(offset, offset + PAGE_SIZE - 1);
     if (error) throw error;
-    const rows = (data ?? []) as ExportTitleRow[];
+    const rows = (data ?? []) as ExportTitleRowUnified[];
     all.push(...rows);
     if (rows.length < PAGE_SIZE) break;
   }
@@ -576,6 +580,63 @@ export async function listTitles(opts: {
   return { rows: rows.map(({ total_count: _total_count, ...r }) => r), totalCount };
 }
 
+export type TitlePlatformFilter = "all" | "naver" | "kakao";
+
+export interface UnifiedTitleListRow {
+  id: number;
+  platform: "naver" | "kakao";
+  title_name: string;
+  thumbnail_url: string | null;
+  author: string | null;
+  studio_name: string | null;
+  is_finished: boolean;
+  is_on_hiatus: boolean;
+  is_adult: boolean;
+  is_new: boolean;
+  weekday: string | null;
+  launch_date: string | null;
+  popularity_rank: number | null;
+  star_score: number | null;
+  comment_count: number | null;
+  view_count: number | null;
+  like_count: number | null;
+}
+
+export interface UnifiedTitleListResult {
+  rows: UnifiedTitleListRow[];
+  totalCount: number;
+}
+
+/** 전체 작품 리스트(네이버+카카오 통합, 플랫폼 필터 포함) - /titles 페이지 전용 */
+export async function listTitlesUnified(opts: {
+  platform?: TitlePlatformFilter;
+  type?: TitleTypeFilter;
+  status?: TitleStatusFilter;
+  sortBy?: TitleSortBy | "views" | "likes";
+  page?: number;
+  pageSize?: number;
+  adultOnly?: boolean;
+  launchFrom?: string;
+  launchTo?: string;
+}): Promise<UnifiedTitleListResult> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("list_titles_unified", {
+    filter_platform: opts.platform ?? "all",
+    filter_type: opts.type ?? "all",
+    filter_status: opts.status ?? "all",
+    sort_by: opts.sortBy ?? "name",
+    page_num: opts.page ?? 1,
+    page_size: opts.pageSize ?? 50,
+    filter_adult_only: opts.adultOnly ?? false,
+    filter_launch_from: opts.launchFrom ?? null,
+    filter_launch_to: opts.launchTo ?? null,
+  });
+  if (error) throw error;
+  const rows = (data ?? []) as (UnifiedTitleListRow & { total_count: number })[];
+  const totalCount = rows[0]?.total_count ?? 0;
+  return { rows: rows.map(({ total_count: _total_count, ...r }) => r), totalCount };
+}
+
 function getKstMondayDateString(): string {
   const now = new Date();
   const kst = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
@@ -633,6 +694,29 @@ export async function getTitlesNeedingStudioFix(): Promise<StudioFixRow[]> {
 }
 
 export interface StudioTitleRow {
+  id: number;
+  platform: "naver" | "kakao";
+  title_name: string;
+  thumbnail_url: string | null;
+  studio_name: string;
+  studio_website_url: string | null;
+  weekday: string | null;
+  popularity_rank: number | null;
+  star_score: number | null;
+  download_count: number | null;
+  view_count: number | null;
+  like_count: number | null;
+}
+
+export interface StudioGroup {
+  studioName: string;
+  studioWebsiteUrl: string | null;
+  totalDownloadCount: number;
+  totalViewCount: number;
+  titles: StudioTitleRow[];
+}
+
+interface NaverStudioRow {
   title_id: number;
   title_name: string;
   thumbnail_url: string | null;
@@ -644,15 +728,21 @@ export interface StudioTitleRow {
   download_count: number | null;
 }
 
-export interface StudioGroup {
-  studioName: string;
-  studioWebsiteUrl: string | null;
-  totalDownloadCount: number;
-  titles: StudioTitleRow[];
+interface KakaoStudioRow {
+  content_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  studio_name: string;
+  view_count: number | null;
+  like_count: number | null;
 }
 
 function sumDownloadCount(titles: StudioTitleRow[]): number {
   return titles.reduce((sum, t) => sum + (t.download_count ?? 0), 0);
+}
+
+function sumViewCount(titles: StudioTitleRow[]): number {
+  return titles.reduce((sum, t) => sum + (t.view_count ?? 0), 0);
 }
 
 function sortStudioTitles(titles: StudioTitleRow[]): StudioTitleRow[] {
@@ -664,12 +754,55 @@ function sortStudioTitles(titles: StudioTitleRow[]): StudioTitleRow[] {
   });
 }
 
-/** 제작사별로 그룹핑한 작품 목록 (제목/인기순위/다운로드수 합계 포함 카드용, 작품 수 많은 제작사 순) */
-export async function getTitlesByStudio(): Promise<StudioGroup[]> {
+/** 네이버/카카오 원본 행을 공통 StudioTitleRow 형태로 합치기 - getTitlesByStudio/getStudioTitles가 공유 */
+async function fetchAllStudioTitles(): Promise<StudioTitleRow[]> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase.rpc("titles_by_studio");
-  if (error) throw error;
-  const rows = (data ?? []) as StudioTitleRow[];
+  const [naverResult, kakaoResult] = await Promise.all([
+    supabase.rpc("titles_by_studio"),
+    supabase.rpc("kakao_titles_by_studio"),
+  ]);
+  if (naverResult.error) throw naverResult.error;
+  if (kakaoResult.error) throw kakaoResult.error;
+
+  const naverRows = ((naverResult.data ?? []) as NaverStudioRow[]).map(
+    (r): StudioTitleRow => ({
+      id: r.title_id,
+      platform: "naver",
+      title_name: r.title_name,
+      thumbnail_url: r.thumbnail_url,
+      studio_name: r.studio_name,
+      studio_website_url: r.studio_website_url,
+      weekday: r.weekday,
+      popularity_rank: r.popularity_rank,
+      star_score: r.star_score,
+      download_count: r.download_count,
+      view_count: null,
+      like_count: null,
+    })
+  );
+  const kakaoRows = ((kakaoResult.data ?? []) as KakaoStudioRow[]).map(
+    (r): StudioTitleRow => ({
+      id: r.content_id,
+      platform: "kakao",
+      title_name: r.title_name,
+      thumbnail_url: r.thumbnail_url,
+      studio_name: r.studio_name,
+      studio_website_url: null,
+      weekday: null,
+      popularity_rank: null,
+      star_score: null,
+      download_count: null,
+      view_count: r.view_count,
+      like_count: r.like_count,
+    })
+  );
+  return [...naverRows, ...kakaoRows];
+}
+
+/** 제작사별로 그룹핑한 작품 목록 (제목/인기순위/다운로드수 합계 포함 카드용, 작품 수 많은 제작사 순).
+ * 네이버/카카오 양쪽에서 studio_name 문자열이 같으면 같은 그룹으로 합쳐진다. */
+export async function getTitlesByStudio(): Promise<StudioGroup[]> {
+  const rows = await fetchAllStudioTitles();
 
   const groups = new Map<string, StudioTitleRow[]>();
   for (const row of rows) {
@@ -683,6 +816,7 @@ export async function getTitlesByStudio(): Promise<StudioGroup[]> {
       studioName,
       studioWebsiteUrl: titles.find((t) => t.studio_website_url)?.studio_website_url ?? null,
       totalDownloadCount: sumDownloadCount(titles),
+      totalViewCount: sumViewCount(titles),
       titles: sortStudioTitles(titles),
     }))
     .sort((a, b) => b.titles.length - a.titles.length || a.studioName.localeCompare(b.studioName, "ko"));
@@ -690,15 +824,13 @@ export async function getTitlesByStudio(): Promise<StudioGroup[]> {
 
 /** 특정 제작사(별칭 반영된 대표 표기)의 작품만 조회 - 제작사 상세페이지 작품 탭용 */
 export async function getStudioTitles(studioName: string): Promise<StudioGroup | null> {
-  const supabase = getSupabaseAnon();
-  const { data, error } = await supabase.rpc("titles_by_studio").eq("studio_name", studioName);
-  if (error) throw error;
-  const rows = (data ?? []) as StudioTitleRow[];
+  const rows = (await fetchAllStudioTitles()).filter((r) => r.studio_name === studioName);
   if (rows.length === 0) return null;
   return {
     studioName,
     studioWebsiteUrl: rows.find((t) => t.studio_website_url)?.studio_website_url ?? null,
     totalDownloadCount: sumDownloadCount(rows),
+    totalViewCount: sumViewCount(rows),
     titles: sortStudioTitles(rows),
   };
 }
@@ -877,4 +1009,157 @@ export async function getTitleGenres(titleId: number): Promise<string[]> {
     .eq("title_id", titleId)
     .eq("tag_type", "GENRE");
   return (data ?? []).map((r) => r.tag_name as string);
+}
+
+// ===================== 카카오웹툰 =====================
+
+export interface KakaoTitleRow {
+  content_id: number;
+  seo_id: string;
+  title_name: string;
+  thumbnail_url: string | null;
+  writer: string | null;
+  painter: string | null;
+  studio_name: string | null;
+  synopsis: string | null;
+  genres: string[];
+  is_adult: boolean;
+  is_finished: boolean;
+  is_on_hiatus: boolean;
+  is_active: boolean;
+  age_rating: string | null;
+}
+
+const KAKAO_TITLE_SELECT =
+  "content_id,seo_id,title_name,thumbnail_url,writer,painter,studio_name,synopsis,genres,is_adult,is_finished,is_on_hiatus,is_active,age_rating";
+
+/** 작품명으로 검색 (연재중인 작품만) */
+export async function searchKakaoTitles(query: string): Promise<KakaoTitleRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("kakao_titles")
+    .select(KAKAO_TITLE_SELECT)
+    .eq("is_active", true)
+    .ilike("title_name", `%${query}%`)
+    .order("title_name")
+    .limit(50);
+  if (error) throw error;
+  return (data ?? []) as KakaoTitleRow[];
+}
+
+export async function getKakaoTitle(contentId: number): Promise<KakaoTitleRow | null> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("kakao_titles")
+    .select(KAKAO_TITLE_SELECT)
+    .eq("content_id", contentId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as KakaoTitleRow | null;
+}
+
+export interface KakaoEpisodeRow {
+  content_id: number;
+  no: number;
+  title: string | null;
+  service_date: string | null;
+  use_type: string;
+}
+
+/** 작품의 회차 목록 (최신순). 카카오는 댓글수를 추적하지 않아 회차 정보만 반환 */
+export async function getKakaoEpisodes(contentId: number): Promise<KakaoEpisodeRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("kakao_episodes")
+    .select("content_id,no,title,service_date,use_type")
+    .eq("content_id", contentId)
+    .order("no", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as KakaoEpisodeRow[];
+}
+
+export interface KakaoStatPoint {
+  snapshot_date: string;
+  view_count: number | null;
+  like_count: number | null;
+}
+
+/** 작품의 날짜별 조회수/좋아요수 추이 */
+export async function getKakaoStatHistory(contentId: number): Promise<KakaoStatPoint[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("kakao_stat_snapshots")
+    .select("snapshot_date,view_count,like_count")
+    .eq("content_id", contentId)
+    .order("snapshot_date", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as KakaoStatPoint[];
+}
+
+export interface KakaoTopRow {
+  content_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  studio_name: string | null;
+  view_count: number | null;
+  like_count: number | null;
+}
+
+/** 조회수/좋아요수 상위 작품 랭킹 - 카카오 홈 화면용 */
+export async function getKakaoTopTitles(sortBy: "views" | "likes" = "views", limit = 10): Promise<KakaoTopRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("kakao_top_titles", { sort_by: sortBy, result_limit: limit });
+  if (error) throw error;
+  return (data ?? []) as KakaoTopRow[];
+}
+
+export interface KakaoNewLaunchRow {
+  content_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+}
+
+/** 이번주(월요일~오늘, KST)에 1화가 등록된 연재중인 신작 - 카카오 홈 화면용 */
+export async function getKakaoTitlesLaunchedThisWeek(): Promise<KakaoNewLaunchRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("kakao_titles_launched_this_week", {
+    monday_date: getKstMondayDateString(),
+  });
+  if (error) throw error;
+  return (data ?? []) as KakaoNewLaunchRow[];
+}
+
+export type UnifiedSearchPlatform = "naver" | "kakao";
+
+export interface UnifiedSearchResult {
+  platform: UnifiedSearchPlatform;
+  id: number;
+  titleName: string;
+  thumbnailUrl: string | null;
+  author: string | null;
+  isAdult: boolean;
+}
+
+/** 네이버/카카오 작품을 동시에 검색해 플랫폼 구분된 결과로 합쳐 반환 (홈 화면 통합검색용) */
+export async function unifiedSearch(query: string): Promise<UnifiedSearchResult[]> {
+  const [naverResults, kakaoResults] = await Promise.all([searchTitles(query), searchKakaoTitles(query)]);
+  const combined: UnifiedSearchResult[] = [
+    ...naverResults.map((t) => ({
+      platform: "naver" as const,
+      id: t.title_id,
+      titleName: t.title_name,
+      thumbnailUrl: t.thumbnail_url,
+      author: t.author,
+      isAdult: t.is_adult,
+    })),
+    ...kakaoResults.map((t) => ({
+      platform: "kakao" as const,
+      id: t.content_id,
+      titleName: t.title_name,
+      thumbnailUrl: t.thumbnail_url,
+      author: [t.writer, t.painter].filter((v, i, arr) => v && arr.indexOf(v) === i).join(" / ") || null,
+      isAdult: t.is_adult,
+    })),
+  ];
+  return combined.sort((a, b) => a.titleName.localeCompare(b.titleName, "ko"));
 }

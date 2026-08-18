@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { getExportTitlesData, type ExportTitleRow } from "@/lib/queries";
+import { getExportTitlesDataUnified, type TitlePlatformFilter } from "@/lib/queries";
 
 const WEEKDAY_KO: Record<string, string> = {
   MONDAY: "월",
@@ -11,6 +11,14 @@ const WEEKDAY_KO: Record<string, string> = {
   SUNDAY: "일",
   DAILY_PLUS: "매일+",
 };
+
+const PLATFORM_VALUES = ["all", "naver", "kakao"] as const;
+
+function platformLabel(platform: TitlePlatformFilter): string {
+  if (platform === "naver") return "네이버";
+  if (platform === "kakao") return "카카오";
+  return "전체";
+}
 
 const STATUS_VALUES = ["all", "ongoing", "new", "finished", "hiatus"] as const;
 type StatusParam = (typeof STATUS_VALUES)[number];
@@ -26,7 +34,7 @@ function statusLabel(status: StatusParam): string {
 const TYPE_VALUES = ["all", "weekday", "daily_plus"] as const;
 type TypeParam = (typeof TYPE_VALUES)[number];
 
-const SORT_VALUES = ["name", "popularity", "star", "launch", "comments"] as const;
+const SORT_VALUES = ["name", "popularity", "star", "launch", "comments", "views", "likes"] as const;
 type SortParam = (typeof SORT_VALUES)[number];
 
 function isValidDate(v: string | null): v is string {
@@ -35,6 +43,10 @@ function isValidDate(v: string | null): v is string {
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
+  const platformParam = url.searchParams.get("platform");
+  const platform: TitlePlatformFilter = (PLATFORM_VALUES as readonly string[]).includes(platformParam ?? "")
+    ? (platformParam as TitlePlatformFilter)
+    : "all";
   const statusParam = url.searchParams.get("status");
   const status: StatusParam = (STATUS_VALUES as readonly string[]).includes(statusParam ?? "")
     ? (statusParam as StatusParam)
@@ -53,15 +65,24 @@ export async function GET(req: Request) {
   const launchFrom = isValidDate(launchFromParam) ? launchFromParam : undefined;
   const launchTo = isValidDate(launchToParam) ? launchToParam : undefined;
 
-  const rows = await getExportTitlesData({ status, type, adultOnly, launchFrom, launchTo, sortBy: sort });
+  const rows = await getExportTitlesDataUnified({
+    platform,
+    status,
+    type,
+    adultOnly,
+    launchFrom,
+    launchTo,
+    sortBy: sort,
+  });
 
-  const sheetNameParts = [statusLabel(status)];
+  const sheetNameParts = [platformLabel(platform), statusLabel(status)];
   if (launchFrom || launchTo) sheetNameParts.push(`${launchFrom ?? ""}~${launchTo ?? ""}`);
 
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet(sheetNameParts.join(" ").slice(0, 31));
 
   const headers = [
+    "연재처",
     "작품명",
     "요일",
     "연령",
@@ -74,6 +95,8 @@ export async function GET(req: Request) {
     "현재 인기순위",
     "현재 총 댓글수",
     "현재 다운로드 수",
+    "현재 조회수",
+    "현재 좋아요수",
     "장르",
     "소재",
     "로그라인",
@@ -88,26 +111,29 @@ export async function GET(req: Request) {
 
   rows.forEach((r, i) => {
     const row = i + 2;
-    sheet.getCell(row, 1).value = r.title_name;
-    sheet.getCell(row, 2).value = r.weekday ? (WEEKDAY_KO[r.weekday] ?? r.weekday) : "";
-    sheet.getCell(row, 3).value = r.age_rating || (r.is_adult ? "성인" : "전체이용가");
-    sheet.getCell(row, 4).value = r.writer ?? "";
-    sheet.getCell(row, 5).value = r.painter ?? "";
-    sheet.getCell(row, 6).value = r.origin_author ?? "";
-    sheet.getCell(row, 7).value = r.studio_name ?? "";
-    sheet.getCell(row, 8).value = r.launch_date ?? "";
-    sheet.getCell(row, 9).value = r.star_score ?? "";
-    sheet.getCell(row, 10).value = r.popularity_rank ?? "";
-    sheet.getCell(row, 11).value = r.total_comment_count ?? "";
-    sheet.getCell(row, 12).value = r.download_count ?? "";
-    sheet.getCell(row, 13).value = r.genre ?? "";
-    sheet.getCell(row, 14).value = r.subject ?? "";
-    sheet.getCell(row, 15).value = r.logline ?? "";
-    sheet.getCell(row, 16).value = r.target_audience ?? "";
-    sheet.getCell(row, 17).value = r.comment ?? "";
+    sheet.getCell(row, 1).value = r.platform === "kakao" ? "카카오" : "네이버";
+    sheet.getCell(row, 2).value = r.title_name;
+    sheet.getCell(row, 3).value = r.weekday ? (WEEKDAY_KO[r.weekday] ?? r.weekday) : "";
+    sheet.getCell(row, 4).value = r.age_rating || (r.is_adult ? "성인" : "전체이용가");
+    sheet.getCell(row, 5).value = r.writer ?? "";
+    sheet.getCell(row, 6).value = r.painter ?? "";
+    sheet.getCell(row, 7).value = r.origin_author ?? "";
+    sheet.getCell(row, 8).value = r.studio_name ?? "";
+    sheet.getCell(row, 9).value = r.launch_date ?? "";
+    sheet.getCell(row, 10).value = r.star_score ?? "";
+    sheet.getCell(row, 11).value = r.popularity_rank ?? "";
+    sheet.getCell(row, 12).value = r.total_comment_count ?? "";
+    sheet.getCell(row, 13).value = r.download_count ?? "";
+    sheet.getCell(row, 14).value = r.view_count ?? "";
+    sheet.getCell(row, 15).value = r.like_count ?? "";
+    sheet.getCell(row, 16).value = r.genre ?? "";
+    sheet.getCell(row, 17).value = r.subject ?? "";
+    sheet.getCell(row, 18).value = r.logline ?? "";
+    sheet.getCell(row, 19).value = r.target_audience ?? "";
+    sheet.getCell(row, 20).value = r.comment ?? "";
   });
 
-  const widths = [24, 6, 10, 16, 16, 16, 16, 12, 8, 12, 12, 14, 16, 24, 30, 20, 24];
+  const widths = [8, 24, 6, 10, 16, 16, 16, 16, 12, 8, 12, 12, 14, 12, 12, 16, 24, 30, 20, 24];
   widths.forEach((w, i) => {
     sheet.getColumn(i + 1).width = w;
   });

@@ -1,9 +1,10 @@
 import Link from "next/link";
 import {
-  listTitles,
+  listTitlesUnified,
   type TitleSortBy,
   type TitleStatusFilter,
   type TitleTypeFilter,
+  type TitlePlatformFilter,
 } from "@/lib/queries";
 import FilterControls from "./FilterControls";
 
@@ -20,11 +21,18 @@ const WEEKDAY_KO: Record<string, string> = {
   DAILY_PLUS: "매일+",
 };
 
+type SortValue = TitleSortBy | "views" | "likes";
+
+const PLATFORM_VALUES: TitlePlatformFilter[] = ["all", "naver", "kakao"];
 const TYPE_VALUES: TitleTypeFilter[] = ["all", "weekday", "daily_plus"];
 const STATUS_VALUES: TitleStatusFilter[] = ["all", "ongoing", "new", "finished", "hiatus"];
-const SORT_VALUES: TitleSortBy[] = ["name", "popularity", "star", "launch", "comments"];
+const SORT_VALUES: SortValue[] = ["name", "popularity", "star", "launch", "comments", "views", "likes"];
 
 const PAGE_SIZE = 50;
+
+function isPlatform(value: string): value is TitlePlatformFilter {
+  return (PLATFORM_VALUES as string[]).includes(value);
+}
 
 function isType(value: string): value is TitleTypeFilter {
   return (TYPE_VALUES as string[]).includes(value);
@@ -34,7 +42,7 @@ function isStatus(value: string): value is TitleStatusFilter {
   return (STATUS_VALUES as string[]).includes(value);
 }
 
-function isSort(value: string): value is TitleSortBy {
+function isSort(value: string): value is SortValue {
   return (SORT_VALUES as string[]).includes(value);
 }
 
@@ -43,15 +51,17 @@ function isDateString(value: string): boolean {
 }
 
 function buildHref(params: {
+  platform: TitlePlatformFilter;
   type: TitleTypeFilter;
   status: TitleStatusFilter;
-  sort: TitleSortBy;
+  sort: SortValue;
   page: number;
   adultOnly: boolean;
   launchFrom: string;
   launchTo: string;
 }) {
   const sp = new URLSearchParams();
+  if (params.platform !== "all") sp.set("platform", params.platform);
   if (params.type !== "all") sp.set("type", params.type);
   if (params.status !== "all") sp.set("status", params.status);
   if (params.sort !== "name") sp.set("sort", params.sort);
@@ -67,6 +77,7 @@ export default async function TitlesPage({
   searchParams,
 }: {
   searchParams: Promise<{
+    platform?: string;
     type?: string;
     status?: string;
     sort?: string;
@@ -76,20 +87,22 @@ export default async function TitlesPage({
     launchTo?: string;
   }>;
 }) {
-  const { type, status, sort, page, adult, launchFrom, launchTo } = await searchParams;
+  const { platform, type, status, sort, page, adult, launchFrom, launchTo } = await searchParams;
+  const selectedPlatform: TitlePlatformFilter = platform && isPlatform(platform) ? platform : "all";
   const selectedType: TitleTypeFilter = type && isType(type) ? type : "all";
   const selectedStatus: TitleStatusFilter = status && isStatus(status) ? status : "all";
-  const selectedSort: TitleSortBy = sort && isSort(sort) ? sort : "name";
+  const selectedSort: SortValue = sort && isSort(sort) ? sort : "name";
   const adultOnly = adult === "true";
   const selectedLaunchFrom = launchFrom && isDateString(launchFrom) ? launchFrom : "";
   const selectedLaunchTo = launchTo && isDateString(launchTo) ? launchTo : "";
   const pageNum = Math.max(1, Number(page) || 1);
 
-  let rows: Awaited<ReturnType<typeof listTitles>>["rows"] = [];
+  let rows: Awaited<ReturnType<typeof listTitlesUnified>>["rows"] = [];
   let totalCount = 0;
   let loadError = false;
   try {
-    const result = await listTitles({
+    const result = await listTitlesUnified({
+      platform: selectedPlatform,
       type: selectedType,
       status: selectedStatus,
       sortBy: selectedSort,
@@ -107,6 +120,7 @@ export default async function TitlesPage({
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   const exportQuery = new URLSearchParams();
+  if (selectedPlatform !== "all") exportQuery.set("platform", selectedPlatform);
   if (selectedType !== "all") exportQuery.set("type", selectedType);
   if (selectedStatus !== "all") exportQuery.set("status", selectedStatus);
   if (selectedSort !== "name") exportQuery.set("sort", selectedSort);
@@ -128,6 +142,7 @@ export default async function TitlesPage({
       )}
 
       <FilterControls
+        platform={selectedPlatform}
         type={selectedType}
         status={selectedStatus}
         sort={selectedSort}
@@ -150,9 +165,9 @@ export default async function TitlesPage({
           <li className="p-4 text-sm text-neutral-500">조건에 맞는 작품이 없습니다.</li>
         )}
         {rows.map((t) => (
-          <li key={t.title_id}>
+          <li key={`${t.platform}-${t.id}`}>
             <Link
-              href={`/webtoon/${t.title_id}`}
+              href={t.platform === "kakao" ? `/kakao/webtoon/${t.id}` : `/webtoon/${t.id}`}
               className="flex items-center gap-3 p-3 hover:bg-neutral-50"
             >
               {t.thumbnail_url && (
@@ -167,6 +182,13 @@ export default async function TitlesPage({
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 truncate font-medium">
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                      t.platform === "kakao" ? "bg-yellow-100 text-yellow-800" : "bg-emerald-100 text-emerald-700"
+                    }`}
+                  >
+                    {t.platform === "kakao" ? "카카오" : "네이버"}
+                  </span>
                   <span className="truncate">{t.title_name}</span>
                   {t.is_new && (
                     <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700">
@@ -202,7 +224,9 @@ export default async function TitlesPage({
                     {t.weekday === "DAILY_PLUS" ? "" : "요일"} {t.popularity_rank}위
                   </div>
                 )}
-                {t.total_comment_count !== null && <div>댓글 {t.total_comment_count.toLocaleString()}개</div>}
+                {t.comment_count !== null && <div>댓글 {t.comment_count.toLocaleString()}개</div>}
+                {t.view_count !== null && <div>조회 {Math.round(t.view_count / 10000).toLocaleString()}만</div>}
+                {t.like_count !== null && <div>좋아요 {Math.round(t.like_count / 10000).toLocaleString()}만</div>}
               </div>
             </Link>
           </li>
@@ -213,6 +237,7 @@ export default async function TitlesPage({
         <div className="mt-4 flex items-center justify-center gap-3 text-sm">
           <Link
             href={buildHref({
+              platform: selectedPlatform,
               type: selectedType,
               status: selectedStatus,
               sort: selectedSort,
@@ -234,6 +259,7 @@ export default async function TitlesPage({
           </span>
           <Link
             href={buildHref({
+              platform: selectedPlatform,
               type: selectedType,
               status: selectedStatus,
               sort: selectedSort,

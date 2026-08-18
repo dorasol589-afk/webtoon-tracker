@@ -561,6 +561,173 @@ as $$
   limit page_size offset (page_num - 1) * page_size;
 $$;
 
+-- 전체 작품 리스트를 네이버+카카오 통합해서 보여주는 버전. list_titles는 그대로 두고(홈 화면
+-- "이번주 신작" 등 네이버 전용 용도에서 계속 씀) 이 함수는 /titles 페이지 전용.
+-- filter_platform: 'all' | 'naver' | 'kakao'
+-- filter_type(요일웹툰/매일+)은 네이버에만 있는 개념이라, 'all'이 아니면 카카오 작품은 결과에서 빠짐.
+-- sort_by 중 popularity/star/comments는 네이버 행에만, views/likes는 카카오 행에만 값이 있고
+-- 나머지 플랫폼 행은 해당 정렬에서 nulls last로 뒤로 밀림(정렬 기준이 없는 게 맞으므로 정상 동작).
+drop function if exists list_titles_unified(text, text, text, text, int, int, boolean, date, date);
+create or replace function list_titles_unified(
+  filter_platform text default 'all',
+  filter_type text default 'all',
+  filter_status text default 'all',
+  sort_by text default 'name',
+  page_num int default 1,
+  page_size int default 50,
+  filter_adult_only boolean default false,
+  filter_launch_from date default null,
+  filter_launch_to date default null
+)
+returns table (
+  id bigint,
+  platform text,
+  title_name text,
+  thumbnail_url text,
+  author text,
+  studio_name text,
+  is_finished boolean,
+  is_on_hiatus boolean,
+  is_adult boolean,
+  is_new boolean,
+  weekday text,
+  launch_date date,
+  popularity_rank integer,
+  star_score numeric,
+  comment_count bigint,
+  view_count bigint,
+  like_count bigint,
+  total_count bigint
+)
+language sql
+stable
+as $$
+  with naver_latest as (
+    select snapshot_date from title_snapshots order by snapshot_date desc limit 1
+  ),
+  naver_comment_date as (
+    select max(snapshot_date) as snapshot_date from comment_snapshots
+  ),
+  naver_comment_totals as (
+    select cs.title_id, sum(cs.comment_count) as total_comment_count
+    from comment_snapshots cs, naver_comment_date d
+    where cs.snapshot_date = d.snapshot_date
+    group by cs.title_id
+  ),
+  -- 작품마다 correlated subquery로 launch_date를 구하면(list_titles의 원래 방식) 작품 수가
+  -- 많아질수록 느려져서 여기(카카오까지 합쳐 두 배로 도는 통합 함수)선 실제로 statement timeout이
+  -- 났음 - episodes/kakao_episodes를 미리 한 번만 집계해서 join하는 방식으로 바꿔서 해결.
+  naver_launch as (
+    select title_id, min(service_date) as launch_date from episodes group by title_id
+  ),
+  naver_rows as (
+    select
+      ti.title_id as id,
+      'naver'::text as platform,
+      ti.title_name,
+      ti.thumbnail_url,
+      ti.author,
+      coalesce(sa.canonical_name, ti.studio_name) as studio_name,
+      ti.is_finished,
+      ti.is_on_hiatus,
+      ti.is_adult,
+      ti.is_new,
+      ts.weekday,
+      coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
+      ts.popularity_rank,
+      ts.star_score,
+      ct.total_comment_count as comment_count,
+      null::bigint as view_count,
+      null::bigint as like_count
+    from titles ti
+    left join title_snapshots ts
+      on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from naver_latest)
+    left join naver_comment_totals ct on ct.title_id = ti.title_id
+    left join studio_aliases sa on sa.raw_name = ti.studio_name
+    left join naver_launch nl on nl.title_id = ti.title_id
+    where ti.is_active = true
+      and (filter_platform = 'all' or filter_platform = 'naver')
+      and (filter_adult_only = false or ti.is_adult = true)
+      and (
+        filter_type = 'all'
+        or (filter_type = 'weekday' and ts.weekday is not null and ts.weekday <> 'DAILY_PLUS')
+        or (filter_type = 'daily_plus' and ts.weekday = 'DAILY_PLUS')
+      )
+      and (
+        filter_status = 'all'
+        or (filter_status = 'finished' and ti.is_finished = true)
+        or (filter_status = 'hiatus' and ti.is_on_hiatus = true)
+        or (filter_status = 'new' and ti.is_new = true)
+        or (filter_status = 'ongoing' and ti.is_finished = false and ti.is_on_hiatus = false)
+      )
+  ),
+  kakao_latest as (
+    select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  ),
+  kakao_launch as (
+    select content_id, min(service_date) as launch_date from kakao_episodes group by content_id
+  ),
+  kakao_rows as (
+    select
+      kt.content_id as id,
+      'kakao'::text as platform,
+      kt.title_name,
+      kt.thumbnail_url,
+      nullif(trim(both ', ' from concat_ws(', ', kt.writer, kt.painter)), '') as author,
+      kt.studio_name,
+      kt.is_finished,
+      kt.is_on_hiatus,
+      kt.is_adult,
+      false as is_new,
+      null::text as weekday,
+      coalesce(kl.launch_date, kt.first_seen_at::date) as launch_date,
+      null::integer as popularity_rank,
+      null::numeric as star_score,
+      null::bigint as comment_count,
+      kss.view_count,
+      kss.like_count
+    from kakao_titles kt
+    left join kakao_stat_snapshots kss
+      on kss.content_id = kt.content_id and kss.snapshot_date = (select snapshot_date from kakao_latest)
+    left join kakao_launch kl on kl.content_id = kt.content_id
+    where kt.is_active = true
+      and (filter_platform = 'all' or filter_platform = 'kakao')
+      and filter_type = 'all'
+      and (filter_adult_only = false or kt.is_adult = true)
+      and (
+        filter_status = 'all'
+        or (filter_status = 'finished' and kt.is_finished = true)
+        or (filter_status = 'hiatus' and kt.is_on_hiatus = true)
+        or (filter_status = 'ongoing' and kt.is_finished = false and kt.is_on_hiatus = false)
+        -- 'new'(신작)는 네이버 전용 개념이라 카카오 쪽은 이 필터에서 항상 제외됨
+      )
+  ),
+  combined as (
+    select * from naver_rows
+    union all
+    select * from kakao_rows
+  ),
+  filtered as (
+    select *
+    from combined
+    where (filter_launch_from is null or launch_date >= filter_launch_from)
+      and (filter_launch_to is null or launch_date <= filter_launch_to)
+  )
+  select f.*, count(*) over() as total_count
+  from filtered f
+  order by
+    case when sort_by = 'star' then f.star_score end desc nulls last,
+    case when sort_by = 'popularity' then f.popularity_rank end asc nulls last,
+    case when sort_by = 'launch' then f.launch_date end desc nulls last,
+    case when sort_by = 'comments' then f.comment_count end desc nulls last,
+    case when sort_by = 'views' then f.view_count end desc nulls last,
+    case when sort_by = 'likes' then f.like_count end desc nulls last,
+    f.title_name asc
+  limit page_size offset (page_num - 1) * page_size;
+$$;
+
+grant execute on function list_titles_unified(text, text, text, text, int, int, boolean, date, date) to anon;
+
 -- 제작사 탭용: 활성 작품 전체를 제작사 정보와 함께 반환 (제작사별 그룹핑은 애플리케이션 레벨에서 처리)
 drop function if exists titles_by_studio();
 create or replace function titles_by_studio()
@@ -605,6 +772,36 @@ as $$
   left join series_latest sl on sl.title_id = ti.title_id
   where ti.is_active = true and ti.studio_name is not null;
 $$;
+
+-- 제작사 탭용 카카오 버전: 스튜디오명(kakao_titles.studio_name, 프로필의 PUBLISHER 작가 표기)이
+-- 있는 활성 작품 전체 반환. 네이버 titles_by_studio()와 이름이 같은 제작사는 애플리케이션 레벨에서
+-- studio_name 문자열 기준으로 같은 그룹에 합쳐짐(별도 별칭 매핑은 하지 않음).
+drop function if exists kakao_titles_by_studio();
+create or replace function kakao_titles_by_studio()
+returns table (
+  content_id bigint,
+  title_name text,
+  thumbnail_url text,
+  studio_name text,
+  view_count bigint,
+  like_count bigint
+)
+language sql
+stable
+as $$
+  with latest as (
+    select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  )
+  select
+    kt.content_id, kt.title_name, kt.thumbnail_url, kt.studio_name,
+    kss.view_count, kss.like_count
+  from kakao_titles kt
+  left join kakao_stat_snapshots kss
+    on kss.content_id = kt.content_id and kss.snapshot_date = (select snapshot_date from latest)
+  where kt.is_active = true and kt.studio_name is not null;
+$$;
+
+grant execute on function kakao_titles_by_studio() to anon;
 
 -- 다운로드수 상위 작품 랭킹(제작사 포함) - 홈 화면용
 drop function if exists top_titles_by_download(int);
@@ -661,24 +858,28 @@ as $$
   limit result_limit;
 $$;
 
--- 전체 작품 엑셀 내보내기용: 페이지네이션 없이 상태/연재구분/성인/런칭일 필터 + 정렬을 적용해 전체 반환.
--- filter_status: null/'all' | 'ongoing' | 'new' | 'finished' | 'hiatus' (list_titles와 동일 의미)
--- filter_type: null/'all' | 'weekday' | 'daily_plus'
--- filter_launch_from/to: 1화 등록일(launch_date) 범위 필터, null이면 미적용
--- sort_by: 'name' | 'popularity' | 'star' | 'launch' | 'comments' (list_titles와 동일 의미)
+-- 전체 작품 엑셀 내보내기용(네이버+카카오 통합). 예전 네이버 전용 export_titles_data는
+-- 이 함수로 완전히 대체돼서 삭제함(이미 실행해뒀다면: drop function if exists
+-- export_titles_data(text, text, boolean, date, date, text);).
+-- 카카오는 댓글수 API 차단, 인기순위 API 신뢰불가로 두 값 다 null - 대신 조회수/좋아요수를 넣는다.
 drop function if exists export_titles_data(text);
 drop function if exists export_titles_data(text, text, boolean, date, date);
 drop function if exists export_titles_data(text, text, boolean, date, date, text);
-create or replace function export_titles_data(
+-- 카카오는 원작자 구분 개념이 없어 origin_author는 항상 null. genre는 kakao_titles.genres 배열을
+-- 그대로 join(', ')한 값(네이버처럼 정식 장르 태그가 아니라 해시태그 키워드임).
+drop function if exists export_titles_data_unified(text, text, text, boolean, date, date, text);
+create or replace function export_titles_data_unified(
+  filter_platform text default 'all',
   filter_status text default 'all',
-  filter_type text default null,
+  filter_type text default 'all',
   filter_adult_only boolean default false,
   filter_launch_from date default null,
   filter_launch_to date default null,
   sort_by text default 'name'
 )
 returns table (
-  title_id bigint,
+  id bigint,
+  platform text,
   title_name text,
   weekday text,
   is_adult boolean,
@@ -694,6 +895,8 @@ returns table (
   launch_date date,
   total_comment_count bigint,
   download_count bigint,
+  view_count bigint,
+  like_count bigint,
   genre text,
   subject text,
   logline text,
@@ -703,75 +906,131 @@ returns table (
 language sql
 stable
 as $$
-  with latest as (
+  with naver_latest as (
     select snapshot_date from title_snapshots order by snapshot_date desc limit 1
   ),
-  genre_agg as (
+  naver_genre_agg as (
     select title_id, string_agg(tag_name, ', ' order by tag_name) as genre
     from title_tags
     where tag_type = 'GENRE'
     group by title_id
   ),
-  latest_comment_date as (
+  naver_comment_date as (
     select max(snapshot_date) as snapshot_date from comment_snapshots
   ),
-  comment_totals as (
+  naver_comment_totals as (
     select cs.title_id, sum(cs.comment_count) as total_comment_count
-    from comment_snapshots cs, latest_comment_date lcd
+    from comment_snapshots cs, naver_comment_date lcd
     where cs.snapshot_date = lcd.snapshot_date
     group by cs.title_id
   ),
-  latest_series_date as (
+  naver_series_date as (
     select title_id, max(snapshot_date) as snapshot_date
     from series_snapshots
     group by title_id
   ),
-  series_latest as (
+  naver_series_latest as (
     select ss.title_id, ss.download_count
     from series_snapshots ss
-    join latest_series_date lsd
+    join naver_series_date lsd
       on lsd.title_id = ss.title_id and lsd.snapshot_date = ss.snapshot_date
   ),
-  base as (
+  -- correlated subquery로 작품마다 따로 launch_date를 구하면(export_titles_data의 원래 방식)
+  -- 카카오까지 합쳐 두 배로 도는 이 통합 함수에서는 느려서(list_titles_unified와 같은 문제),
+  -- episodes를 미리 한 번만 집계해서 join하는 방식으로 함
+  naver_launch as (
+    select title_id, min(service_date) as launch_date from episodes group by title_id
+  ),
+  naver_rows as (
     select
-      ti.title_id, ti.title_name, ts.weekday, ti.is_adult, ti.age_rating,
+      ti.title_id as id,
+      'naver'::text as platform,
+      ti.title_name, ts.weekday, ti.is_adult, ti.age_rating,
       ti.writer, ti.painter, ti.origin_author,
       coalesce(sa.canonical_name, ti.studio_name) as studio_name,
       ti.is_finished, ti.is_on_hiatus, ts.star_score, ts.popularity_rank,
-      coalesce(
-        (select min(e.service_date) from episodes e where e.title_id = ti.title_id),
-        ti.first_seen_at::date
-      ) as launch_date,
+      coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
       ct.total_comment_count,
       sl.download_count,
+      null::bigint as view_count,
+      null::bigint as like_count,
       ga.genre,
       tn.subject, tn.logline, tn.target_audience, tn.comment
     from titles ti
     left join title_snapshots ts
-      on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from latest)
-    left join comment_totals ct on ct.title_id = ti.title_id
-    left join series_latest sl on sl.title_id = ti.title_id
-    left join genre_agg ga on ga.title_id = ti.title_id
+      on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from naver_latest)
+    left join naver_comment_totals ct on ct.title_id = ti.title_id
+    left join naver_series_latest sl on sl.title_id = ti.title_id
+    left join naver_genre_agg ga on ga.title_id = ti.title_id
     left join title_notes tn on tn.title_id = ti.title_id
     left join studio_aliases sa on sa.raw_name = ti.studio_name
+    left join naver_launch nl on nl.title_id = ti.title_id
     where ti.is_active = true
+      and (filter_platform = 'all' or filter_platform = 'naver')
       and (filter_adult_only = false or ti.is_adult = true)
       and (
-        filter_type is null or filter_type = 'all'
+        filter_type = 'all'
         or (filter_type = 'weekday' and ts.weekday is not null and ts.weekday <> 'DAILY_PLUS')
         or (filter_type = 'daily_plus' and ts.weekday = 'DAILY_PLUS')
       )
       and (
-        filter_status is null or filter_status = 'all'
+        filter_status = 'all'
         or (filter_status = 'finished' and ti.is_finished = true)
         or (filter_status = 'hiatus' and ti.is_on_hiatus = true)
         or (filter_status = 'new' and ti.is_new = true)
         or (filter_status = 'ongoing' and ti.is_finished = false and ti.is_on_hiatus = false)
       )
   ),
+  kakao_latest as (
+    select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  ),
+  kakao_launch as (
+    select content_id, min(service_date) as launch_date from kakao_episodes group by content_id
+  ),
+  kakao_rows as (
+    select
+      kt.content_id as id,
+      'kakao'::text as platform,
+      kt.title_name,
+      null::text as weekday,
+      kt.is_adult,
+      kt.age_rating,
+      kt.writer, kt.painter,
+      null::text as origin_author,
+      kt.studio_name,
+      kt.is_finished, kt.is_on_hiatus,
+      null::numeric as star_score,
+      null::integer as popularity_rank,
+      coalesce(kl.launch_date, kt.first_seen_at::date) as launch_date,
+      null::bigint as total_comment_count,
+      null::bigint as download_count,
+      kss.view_count,
+      kss.like_count,
+      nullif(array_to_string(kt.genres, ', '), '') as genre,
+      null::text as subject, null::text as logline, null::text as target_audience, null::text as comment
+    from kakao_titles kt
+    left join kakao_stat_snapshots kss
+      on kss.content_id = kt.content_id and kss.snapshot_date = (select snapshot_date from kakao_latest)
+    left join kakao_launch kl on kl.content_id = kt.content_id
+    where kt.is_active = true
+      and (filter_platform = 'all' or filter_platform = 'kakao')
+      and filter_type = 'all'
+      and (filter_adult_only = false or kt.is_adult = true)
+      and (
+        filter_status = 'all'
+        or (filter_status = 'finished' and kt.is_finished = true)
+        or (filter_status = 'hiatus' and kt.is_on_hiatus = true)
+        or (filter_status = 'ongoing' and kt.is_finished = false and kt.is_on_hiatus = false)
+      )
+  ),
+  combined as (
+    select * from naver_rows
+    union all
+    select * from kakao_rows
+  ),
   filtered as (
     select *
-    from base
+    from combined
     where (filter_launch_from is null or launch_date >= filter_launch_from)
       and (filter_launch_to is null or launch_date <= filter_launch_to)
   )
@@ -782,6 +1041,8 @@ as $$
     case when sort_by = 'popularity' then popularity_rank end asc nulls last,
     case when sort_by = 'launch' then launch_date end desc nulls last,
     case when sort_by = 'comments' then total_comment_count end desc nulls last,
+    case when sort_by = 'views' then view_count end desc nulls last,
+    case when sort_by = 'likes' then like_count end desc nulls last,
     title_name asc;
 $$;
 
@@ -792,4 +1053,138 @@ grant execute on function list_titles(text, text, text, int, int, boolean, date,
 grant execute on function titles_by_studio() to anon;
 grant execute on function top_titles_by_download(int) to anon;
 grant execute on function tag_stats(text, int) to anon;
-grant execute on function export_titles_data(text, text, boolean, date, date, text) to anon;
+grant execute on function export_titles_data_unified(text, text, text, boolean, date, date, text) to anon;
+
+-- ===================== 카카오웹툰 =====================
+-- 네이버와는 완전히 별개 플랫폼이라 title_id 네임스페이스가 겹치지 않도록 독립된 테이블 세트로 관리.
+-- 카카오는 댓글수 API가 일반 서버 요청을 차단해(브라우저 핑거프린팅으로 추정) 댓글수 추적은
+-- 제외하고, 대신 사용자가 원한 "조회수"를 네이버의 다운로드수 대응 지표로 추적한다.
+
+create table if not exists kakao_titles (
+  content_id     bigint primary key,
+  seo_id         text not null,
+  title_name     text not null,
+  thumbnail_url  text,
+  writer         text,
+  painter        text,
+  studio_name    text, -- 카카오 프로필 API의 PUBLISHER 작가 표기 (제작사/스튜디오)
+  synopsis       text,
+  genres         text[] not null default '{}',
+  is_adult       boolean not null default false,
+  is_finished    boolean not null default false,
+  is_on_hiatus   boolean not null default false, -- 요일별 목록(timetables)의 rest 필드
+  is_active      boolean not null default true,
+  age_rating     text,
+  first_seen_at  timestamptz not null default now(),
+  last_seen_at   timestamptz not null default now(),
+  -- 완결작은 회차/조회수가 더 늘지 않으므로 상세정보+조회수+회차목록을 최초 1회만 수집한다.
+  -- null이면 아직 백필 전 (수집기가 새벽 예산 안에서 이어서 처리).
+  finished_backfilled_at timestamptz
+);
+
+-- 회차 목록. 댓글수는 추적하지 않지만 회차 수/무료구분 표시를 위해 유지.
+create table if not exists kakao_episodes (
+  content_id   bigint not null references kakao_titles(content_id),
+  no           integer not null,
+  episode_id   bigint not null,
+  title        text,
+  service_date date,
+  use_type     text not null, -- FREE | WAIT_FOR_FREE | EARLY_ACCESS 등
+  primary key (content_id, no)
+);
+
+-- 작품 단위 일일 조회수/좋아요수 스냅샷 (네이버 series_snapshots의 다운로드수에 대응)
+create table if not exists kakao_stat_snapshots (
+  content_id    bigint not null references kakao_titles(content_id),
+  snapshot_date date not null,
+  view_count    bigint,
+  like_count    bigint,
+  primary key (content_id, snapshot_date)
+);
+
+create index if not exists idx_kakao_stat_snapshots_date on kakao_stat_snapshots (snapshot_date);
+
+-- 요일별 인기순위(timetables 응답의 sorting 필드)는 시도해봤으나 세션 상태에 따라 값이 들쭉날쭉
+-- 빠지는 걸 확인해(실제 브라우저에서도 재현됨) 신뢰할 수 없다고 판단, kakao_weekday_ranks 테이블 및
+-- 관련 함수는 만들지 않기로 함 - 이미 실행했다면 아래로 정리:
+--   drop function if exists kakao_weekday_popularity_ranking(text, int);
+--   drop table if exists kakao_weekday_ranks;
+
+alter table kakao_titles enable row level security;
+alter table kakao_episodes enable row level security;
+alter table kakao_stat_snapshots enable row level security;
+
+-- 네이버 테이블과 동일하게 읽기는 누구나(anon), 쓰기는 service role만
+drop policy if exists "kakao_titles are publicly readable" on kakao_titles;
+create policy "kakao_titles are publicly readable"
+  on kakao_titles for select
+  using (true);
+
+drop policy if exists "kakao_episodes are publicly readable" on kakao_episodes;
+create policy "kakao_episodes are publicly readable"
+  on kakao_episodes for select
+  using (true);
+
+drop policy if exists "kakao_stat_snapshots are publicly readable" on kakao_stat_snapshots;
+create policy "kakao_stat_snapshots are publicly readable"
+  on kakao_stat_snapshots for select
+  using (true);
+
+create or replace function kakao_latest_snapshot_date()
+returns date
+language sql
+stable
+as $$
+  select max(snapshot_date) from kakao_stat_snapshots;
+$$;
+
+-- 조회수/좋아요수 상위 작품 랭킹 - 카카오 홈 화면용. sort_by: 'views' | 'likes'
+create or replace function kakao_top_titles(sort_by text default 'views', result_limit int default 10)
+returns table (
+  content_id bigint,
+  title_name text,
+  thumbnail_url text,
+  studio_name text,
+  view_count bigint,
+  like_count bigint
+)
+language sql
+stable
+as $$
+  with latest as (
+    select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  )
+  select kt.content_id, kt.title_name, kt.thumbnail_url, kt.studio_name, kss.view_count, kss.like_count
+  from kakao_stat_snapshots kss
+  join latest on kss.snapshot_date = latest.snapshot_date
+  join kakao_titles kt on kt.content_id = kss.content_id
+  where kt.is_active = true
+  order by
+    case when sort_by = 'likes' then kss.like_count else kss.view_count end desc nulls last
+  limit result_limit;
+$$;
+
+-- 이번주(월요일~오늘, KST)에 1화가 등록된 연재중인 신작 - 홈 화면 "이번주 신작"용
+create or replace function kakao_titles_launched_this_week(monday_date date)
+returns table (
+  content_id bigint,
+  title_name text,
+  thumbnail_url text
+)
+language sql
+stable
+as $$
+  select kt.content_id, kt.title_name, kt.thumbnail_url
+  from kakao_titles kt
+  join (
+    select content_id, min(service_date) as launch_date
+    from kakao_episodes
+    group by content_id
+  ) e on e.content_id = kt.content_id
+  where kt.is_active = true and e.launch_date >= monday_date
+  order by e.launch_date desc;
+$$;
+
+grant execute on function kakao_latest_snapshot_date() to anon;
+grant execute on function kakao_top_titles(text, int) to anon;
+grant execute on function kakao_titles_launched_this_week(date) to anon;

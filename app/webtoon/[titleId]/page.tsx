@@ -70,7 +70,16 @@ export default async function TitlePage({
           />
         )}
         <div>
-          <h1 className="text-xl font-semibold">{title.title_name}</h1>
+          <h1 className="text-xl font-semibold">
+            <a
+              href={`https://comic.naver.com/webtoon/list?titleId=${id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:underline"
+            >
+              {title.title_name}
+            </a>
+          </h1>
           <p className="text-sm text-neutral-500">{title.author}</p>
           {title.is_new && (
             <span className="mt-1 mr-1 inline-block rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">

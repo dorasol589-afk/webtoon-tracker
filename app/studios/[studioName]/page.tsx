@@ -66,7 +66,8 @@ export default async function StudioDetailPage({
         </h1>
         <p className="text-sm text-neutral-400">
           작품 {studio.titles.length}개
-          {studio.totalDownloadCount > 0 && ` · 누적 다운로드 ${formatManwon(studio.totalDownloadCount)}`}
+          {studio.totalDownloadCount > 0 && ` · 네이버 누적 다운로드 ${formatManwon(studio.totalDownloadCount)}`}
+          {studio.totalViewCount > 0 && ` · 카카오 누적 조회수 ${formatManwon(studio.totalViewCount)}`}
         </p>
       </div>
 
@@ -100,8 +101,8 @@ export default async function StudioDetailPage({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {studio.titles.map((t) => (
             <Link
-              key={t.title_id}
-              href={`/webtoon/${t.title_id}`}
+              key={`${t.platform}-${t.id}`}
+              href={t.platform === "kakao" ? `/kakao/webtoon/${t.id}` : `/webtoon/${t.id}`}
               className="rounded-lg border border-neutral-200 bg-white p-2 hover:bg-neutral-50"
             >
               {t.thumbnail_url && (
@@ -114,12 +115,25 @@ export default async function StudioDetailPage({
                   className="mb-2 h-auto w-full rounded"
                 />
               )}
+              <span
+                className={`mb-1 inline-block rounded px-1.5 py-0.5 text-[10px] ${
+                  t.platform === "kakao" ? "bg-yellow-100 text-yellow-800" : "bg-emerald-100 text-emerald-700"
+                }`}
+              >
+                {t.platform === "kakao" ? "카카오" : "네이버"}
+              </span>
               <div className="truncate text-sm font-medium">{t.title_name}</div>
               {t.weekday && t.popularity_rank !== null && (
                 <div className="text-xs text-neutral-500">
                   {WEEKDAY_KO[t.weekday] ?? t.weekday}
                   {t.weekday === "DAILY_PLUS" ? "" : "요일"} 인기 {t.popularity_rank}위
                 </div>
+              )}
+              {t.platform === "naver" && t.download_count !== null && (
+                <div className="text-xs text-neutral-500">다운 {formatManwon(t.download_count)}</div>
+              )}
+              {t.platform === "kakao" && t.view_count !== null && (
+                <div className="text-xs text-neutral-500">조회 {formatManwon(t.view_count)}</div>
               )}
             </Link>
           ))}

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "collect": "tsx scripts/collect.ts"
+    "collect": "tsx scripts/collect.ts",
+    "collect:kakao": "tsx scripts/collectKakao.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

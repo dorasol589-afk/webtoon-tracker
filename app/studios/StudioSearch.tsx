@@ -16,7 +16,7 @@ const WEEKDAY_KO: Record<string, string> = {
   DAILY_PLUS: "매일+",
 };
 
-type SortBy = "titleCount" | "downloadCount";
+type SortBy = "titleCount" | "downloadCount" | "viewCount";
 
 export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
   const [query, setQuery] = useState("");
@@ -28,6 +28,9 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
     return [...base].sort((a, b) => {
       if (sortBy === "downloadCount") {
         return b.totalDownloadCount - a.totalDownloadCount || b.titles.length - a.titles.length;
+      }
+      if (sortBy === "viewCount") {
+        return b.totalViewCount - a.totalViewCount || b.titles.length - a.titles.length;
       }
       return b.titles.length - a.titles.length || b.totalDownloadCount - a.totalDownloadCount;
     });
@@ -49,7 +52,8 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
           className="rounded border border-neutral-200 px-2 py-2 text-sm focus:border-neutral-400 focus:outline-none"
         >
           <option value="titleCount">작품수순</option>
-          <option value="downloadCount">다운수순</option>
+          <option value="downloadCount">다운수순(네이버)</option>
+          <option value="viewCount">조회수순(카카오)</option>
         </select>
       </div>
 
@@ -73,15 +77,20 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
             <span className="text-xs text-neutral-400">{group.titles.length}개</span>
             {group.totalDownloadCount > 0 && (
               <span className="text-xs text-neutral-400">
-                누적 다운로드 {formatManwon(group.totalDownloadCount)}
+                네이버 누적 다운로드 {formatManwon(group.totalDownloadCount)}
+              </span>
+            )}
+            {group.totalViewCount > 0 && (
+              <span className="text-xs text-neutral-400">
+                카카오 누적 조회수 {formatManwon(group.totalViewCount)}
               </span>
             )}
           </h2>
           <div className="flex gap-3 overflow-x-auto pb-1">
             {group.titles.map((t) => (
               <Link
-                key={t.title_id}
-                href={`/webtoon/${t.title_id}`}
+                key={`${t.platform}-${t.id}`}
+                href={t.platform === "kakao" ? `/kakao/webtoon/${t.id}` : `/webtoon/${t.id}`}
                 className="w-28 shrink-0 rounded-lg border border-neutral-200 bg-white p-2 hover:bg-neutral-50"
               >
                 {t.thumbnail_url && (
@@ -94,12 +103,25 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
                     className="mb-2 h-auto w-full rounded"
                   />
                 )}
+                <span
+                  className={`mb-1 inline-block rounded px-1.5 py-0.5 text-[10px] ${
+                    t.platform === "kakao" ? "bg-yellow-100 text-yellow-800" : "bg-emerald-100 text-emerald-700"
+                  }`}
+                >
+                  {t.platform === "kakao" ? "카카오" : "네이버"}
+                </span>
                 <div className="truncate text-sm font-medium">{t.title_name}</div>
                 {t.weekday && t.popularity_rank !== null && (
                   <div className="text-xs text-neutral-500">
                     {WEEKDAY_KO[t.weekday] ?? t.weekday}
                     {t.weekday === "DAILY_PLUS" ? "" : "요일"} 인기 {t.popularity_rank}위
                   </div>
+                )}
+                {t.platform === "naver" && t.download_count !== null && (
+                  <div className="text-xs text-neutral-500">다운 {formatManwon(t.download_count)}</div>
+                )}
+                {t.platform === "kakao" && t.view_count !== null && (
+                  <div className="text-xs text-neutral-500">조회 {formatManwon(t.view_count)}</div>
                 )}
               </Link>
             ))}
