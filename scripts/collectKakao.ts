@@ -57,18 +57,14 @@ function dedupeBy<T>(arr: T[], keyFn: (item: T) => string): T[] {
   return [...map.values()];
 }
 
-// 카카오 CDN 이미지 키(titleImageB)는 확장자 없이 내려오는데, 확장자를 안 붙이면 CDN이
-// NoSuchKey로 404를 낸다(브라우저에서 실제 확인함) - .webp를 붙여야 정상 로드됨
-function toImageUrl(key: string | undefined): string | null {
-  return key ? `${key}.webp` : null;
-}
-
 function titleRowFromCard(card: KakaoCardContent, isFinished: boolean, isNew: boolean, nowIso: string) {
   return {
     content_id: card.id,
     seo_id: card.seoId,
     title_name: card.title,
-    thumbnail_url: toImageUrl(card.titleImageB),
+    // 목록 API(card.titleImageB)는 제목 텍스트만 박힌 배너 플레이스홀더라 썸네일로 못 쓴다
+    // (lib/kakao.ts의 fetchViewsAndLikes 주석 참고) - 진짜 표지는 [2/4] 상세수집 단계에서
+    // coverImageUrl로 별도 upsert된다. 여기선 최초 삽입 시 null로 둬서 깨진 이미지가 안 뜨게 한다.
     is_adult: card.adult ?? false,
     is_finished: isFinished,
     is_on_hiatus: card.rest ?? false,
@@ -134,6 +130,13 @@ async function collectTitleDetail(
         { onConflict: "content_id,snapshot_date" }
       );
       if (error) console.error(`  kakao_stat_snapshots upsert 실패 (${card.title}):`, error.message);
+    }
+    if (stats.coverImageUrl) {
+      const { error } = await supabase
+        .from("kakao_titles")
+        .update({ thumbnail_url: stats.coverImageUrl })
+        .eq("content_id", card.id);
+      if (error) console.error(`  kakao_titles(썸네일) upsert 실패 (${card.title}):`, error.message);
     }
   } else {
     console.error(`  조회수/좋아요수 조회 실패 (contentId=${card.id}, ${card.title}):`, statsResult.reason);

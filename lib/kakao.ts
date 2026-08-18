@@ -194,6 +194,7 @@ export async function fetchTitleProfile(contentId: number): Promise<KakaoTitlePr
 export interface KakaoStats {
   viewCount: number | null;
   likeCount: number | null;
+  coverImageUrl: string | null;
 }
 
 // webtoon.kakao.com 작품 홈 페이지는 gateway-kw API와 달리 요청이 몰리면 403(IP 차단)을 걸어버리는 걸
@@ -222,6 +223,11 @@ function scheduleContentPageFetch<T>(run: () => Promise<T>): Promise<T> {
  * 헤더 영역에 장르 -> 조회수(눈 아이콘) -> 좋아요수(따봉 아이콘) 순서로 <p> 3개가 연달아 나온다.
  * 형식이 안 맞으면(작품 정보가 없거나 페이지 구조가 바뀐 경우) null로 반환 - 0으로 조용히
  * 대체하지 않아야 급락 오인 사고를 막을 수 있음.
+ *
+ * 표지 이미지도 이 페이지에서 같이 뽑아온다: 목록 API(timetables)의 titleImageB는 제목 텍스트만
+ * 박힌 배너 플레이스홀더로 바뀌어 있어(모든 작품 공통, 신작만의 문제가 아님 - 실제 확인함) 썸네일로
+ * 못 쓴다. 진짜 표지는 상세페이지의 <picture><source type="image/webp" srcSet="...c1/..."/> 에만
+ * 있어서, 어차피 뜨는 이 HTML을 재사용해 추출한다(추가 요청 없음).
  */
 export async function fetchViewsAndLikes(seoId: string, contentId: number): Promise<KakaoStats> {
   const url = `https://webtoon.kakao.com/content/${encodeURIComponent(seoId)}/${contentId}`;
@@ -229,11 +235,14 @@ export async function fetchViewsAndLikes(seoId: string, contentId: number): Prom
   const re =
     /<p class="whitespace-pre-wrap break-all break-words support-break-word s12-regular-white ml-2 opacity-75">([^<]+)<\/p>/g;
   const matches = [...html.matchAll(re)].map((m) => m[1]);
+  const coverMatch = html.match(/<picture[^>]*><source type="image\/webp" srcSet="([^"]+)"/);
+  const coverImageUrl = coverMatch ? coverMatch[1] : null;
   // matches[0] = 장르, matches[1] = 조회수, matches[2] = 좋아요수
-  if (matches.length < 3) return { viewCount: null, likeCount: null };
+  if (matches.length < 3) return { viewCount: null, likeCount: null, coverImageUrl };
   return {
     viewCount: parseKoreanCount(matches[1]),
     likeCount: parseKoreanCount(matches[2]),
+    coverImageUrl,
   };
 }
 
