@@ -1020,18 +1020,20 @@ export interface KakaoTitleRow {
   thumbnail_url: string | null;
   writer: string | null;
   painter: string | null;
+  origin_author: string | null;
   studio_name: string | null;
   synopsis: string | null;
   genres: string[];
   is_adult: boolean;
   is_finished: boolean;
   is_on_hiatus: boolean;
+  is_new: boolean;
   is_active: boolean;
   age_rating: string | null;
 }
 
 const KAKAO_TITLE_SELECT =
-  "content_id,seo_id,title_name,thumbnail_url,writer,painter,studio_name,synopsis,genres,is_adult,is_finished,is_on_hiatus,is_active,age_rating";
+  "content_id,seo_id,title_name,thumbnail_url,writer,painter,origin_author,studio_name,synopsis,genres,is_adult,is_finished,is_on_hiatus,is_new,is_active,age_rating";
 
 /** 작품명으로 검색 (연재중인 작품만) */
 export async function searchKakaoTitles(query: string): Promise<KakaoTitleRow[]> {
@@ -1119,14 +1121,38 @@ export interface KakaoNewLaunchRow {
   thumbnail_url: string | null;
 }
 
-/** 이번주(월요일~오늘, KST)에 1화가 등록된 연재중인 신작 - 카카오 홈 화면용 */
-export async function getKakaoTitlesLaunchedThisWeek(): Promise<KakaoNewLaunchRow[]> {
+/** 카카오 사이트의 "신작" 카테고리(kakao_titles.is_new)에 속하면서 최근 daysBack일 안에
+ * 1화가 등록된 작품 - 카카오 홈 화면용 */
+export async function getKakaoTitlesLaunchedRecently(daysBack = 7): Promise<KakaoNewLaunchRow[]> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase.rpc("kakao_titles_launched_this_week", {
-    monday_date: getKstMondayDateString(),
-  });
+  const { data, error } = await supabase.rpc("kakao_titles_launched_recently", { days_back: daysBack });
   if (error) throw error;
   return (data ?? []) as KakaoNewLaunchRow[];
+}
+
+export interface KakaoStudioFixRow {
+  content_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+}
+
+/** 제작사 정보가 비어있는 연재중 작품 전체 - 카카오 홈 화면 "제작사 정보 필요"용 */
+export async function getKakaoTitlesNeedingStudioFix(): Promise<KakaoStudioFixRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("kakao_titles_needing_studio_fix");
+  if (error) throw error;
+  return (data ?? []) as KakaoStudioFixRow[];
+}
+
+/** 카카오 작품 제작사명 직접 수정 - 홈 화면에서 빈값 바로 고치기용 */
+export async function updateKakaoTitleStudioName(contentId: number, studioName: string): Promise<void> {
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("kakao_titles")
+    .update({ studio_name: studioName || null })
+    .eq("content_id", contentId);
+  if (error) throw error;
 }
 
 export type UnifiedSearchPlatform = "naver" | "kakao";

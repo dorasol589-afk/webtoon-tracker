@@ -865,8 +865,8 @@ $$;
 drop function if exists export_titles_data(text);
 drop function if exists export_titles_data(text, text, boolean, date, date);
 drop function if exists export_titles_data(text, text, boolean, date, date, text);
--- 카카오는 원작자 구분 개념이 없어 origin_author는 항상 null. genre는 kakao_titles.genres 배열을
--- 그대로 join(', ')한 값(네이버처럼 정식 장르 태그가 아니라 해시태그 키워드임).
+-- genre는 kakao_titles.genres 배열을 그대로 join(', ')한 값
+-- (네이버처럼 정식 장르 태그가 아니라 해시태그 키워드임).
 drop function if exists export_titles_data_unified(text, text, text, boolean, date, date, text);
 create or replace function export_titles_data_unified(
   filter_platform text default 'all',
@@ -995,8 +995,7 @@ as $$
       null::text as weekday,
       kt.is_adult,
       kt.age_rating,
-      kt.writer, kt.painter,
-      null::text as origin_author,
+      kt.writer, kt.painter, kt.origin_author,
       kt.studio_name,
       kt.is_finished, kt.is_on_hiatus,
       null::numeric as star_score,
@@ -1067,12 +1066,15 @@ create table if not exists kakao_titles (
   thumbnail_url  text,
   writer         text,
   painter        text,
+  origin_author  text, -- 카카오 프로필 API의 ORIGINAL_STORY 작가 표기 (원작)
   studio_name    text, -- 카카오 프로필 API의 PUBLISHER 작가 표기 (제작사/스튜디오)
   synopsis       text,
   genres         text[] not null default '{}',
   is_adult       boolean not null default false,
   is_finished    boolean not null default false,
   is_on_hiatus   boolean not null default false, -- 요일별 목록(timetables)의 rest 필드
+  -- 사이트의 "신작" 카테고리(timetable_new)에 포함되는지 여부. 네이버 titles.is_new에 대응.
+  is_new         boolean not null default false,
   is_active      boolean not null default true,
   age_rating     text,
   first_seen_at  timestamptz not null default now(),
@@ -1081,6 +1083,10 @@ create table if not exists kakao_titles (
   -- null이면 아직 백필 전 (수집기가 새벽 예산 안에서 이어서 처리).
   finished_backfilled_at timestamptz
 );
+
+-- 이미 배포된 테이블에 새 컬럼을 안전하게 추가
+alter table kakao_titles add column if not exists origin_author text;
+alter table kakao_titles add column if not exists is_new boolean not null default false;
 
 -- 회차 목록. 댓글수는 추적하지 않지만 회차 수/무료구분 표시를 위해 유지.
 create table if not exists kakao_episodes (
@@ -1164,8 +1170,11 @@ as $$
   limit result_limit;
 $$;
 
--- 이번주(월요일~오늘, KST)에 1화가 등록된 연재중인 신작 - 홈 화면 "이번주 신작"용
-create or replace function kakao_titles_launched_this_week(monday_date date)
+-- 카카오 사이트의 "신작" 카테고리(kakao_titles.is_new, timetable_new 기준)에 속하면서
+-- 최근 days_back일 안에 1화가 등록된 작품 - 홈 화면 "최근 신작"용.
+drop function if exists kakao_titles_launched_this_week(date);
+drop function if exists kakao_titles_launched_recently(int);
+create or replace function kakao_titles_launched_recently(days_back int default 7)
 returns table (
   content_id bigint,
   title_name text,
@@ -1181,10 +1190,29 @@ as $$
     from kakao_episodes
     group by content_id
   ) e on e.content_id = kt.content_id
-  where kt.is_active = true and e.launch_date >= monday_date
+  where kt.is_active = true and kt.is_new = true and e.launch_date >= current_date - days_back
   order by e.launch_date desc;
+$$;
+
+-- 제작사(PUBLISHER 작가 표기)가 비어있는 연재중 작품 - 홈 화면 "제작사 정보 필요"용.
+-- 네이버의 titles.studio_name과 달리 "다중"류 특수값은 없고 null/빈 문자열만 있으면 됨.
+create or replace function kakao_titles_needing_studio_fix()
+returns table (
+  content_id bigint,
+  title_name text,
+  thumbnail_url text
+)
+language sql
+stable
+as $$
+  select kt.content_id, kt.title_name, kt.thumbnail_url
+  from kakao_titles kt
+  where kt.is_active = true and kt.is_finished = false
+    and (kt.studio_name is null or kt.studio_name = '')
+  order by kt.title_name asc;
 $$;
 
 grant execute on function kakao_latest_snapshot_date() to anon;
 grant execute on function kakao_top_titles(text, int) to anon;
-grant execute on function kakao_titles_launched_this_week(date) to anon;
+grant execute on function kakao_titles_launched_recently(int) to anon;
+grant execute on function kakao_titles_needing_studio_fix() to anon;

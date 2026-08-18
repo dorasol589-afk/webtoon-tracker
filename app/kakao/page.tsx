@@ -2,11 +2,15 @@ import Link from "next/link";
 import {
   unifiedSearch,
   getKakaoTopTitles,
-  getKakaoTitlesLaunchedThisWeek,
+  getKakaoTitlesLaunchedRecently,
+  getKakaoTitlesNeedingStudioFix,
   type UnifiedSearchResult,
   type KakaoTopRow,
   type KakaoNewLaunchRow,
+  type KakaoStudioFixRow,
 } from "@/lib/queries";
+import { hasAdminAccess } from "@/lib/supabase";
+import KakaoStudioNameEditor from "./KakaoStudioNameEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +25,8 @@ type LoadResult =
       type: "rankings";
       viewRanking: KakaoTopRow[];
       likeRanking: KakaoTopRow[];
-      thisWeekLaunches: KakaoNewLaunchRow[];
+      recentLaunches: KakaoNewLaunchRow[];
+      studioFixNeeded: KakaoStudioFixRow[];
     };
 
 async function loadData(q: string | undefined): Promise<LoadResult> {
@@ -29,12 +34,13 @@ async function loadData(q: string | undefined): Promise<LoadResult> {
     if (q) {
       return { type: "search", results: await unifiedSearch(q) };
     }
-    const [viewRanking, likeRanking, thisWeekLaunches] = await Promise.all([
+    const [viewRanking, likeRanking, recentLaunches, studioFixNeeded] = await Promise.all([
       getKakaoTopTitles("views", 10),
       getKakaoTopTitles("likes", 10),
-      getKakaoTitlesLaunchedThisWeek(),
+      getKakaoTitlesLaunchedRecently(),
+      getKakaoTitlesNeedingStudioFix(),
     ]);
-    return { type: "rankings", viewRanking, likeRanking, thisWeekLaunches };
+    return { type: "rankings", viewRanking, likeRanking, recentLaunches, studioFixNeeded };
   } catch {
     return { type: "error" };
   }
@@ -79,6 +85,7 @@ export default async function KakaoHomePage({
 }) {
   const { q } = await searchParams;
   const result = await loadData(q);
+  const readOnly = !hasAdminAccess();
 
   return (
     <div>
@@ -140,14 +147,14 @@ export default async function KakaoHomePage({
 
       {result.type === "rankings" && (
         <div>
-          {result.thisWeekLaunches.length > 0 && (
+          {result.recentLaunches.length > 0 && (
             <section className="mb-8">
               <h2 className="mb-3 flex items-baseline gap-2 text-sm font-semibold text-neutral-500">
-                이번주 신작
-                <span className="text-xs text-neutral-400">{result.thisWeekLaunches.length}개</span>
+                최근 신작
+                <span className="text-xs text-neutral-400">{result.recentLaunches.length}개</span>
               </h2>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-                {result.thisWeekLaunches.map((t) => (
+                {result.recentLaunches.map((t) => (
                   <Link
                     key={t.content_id}
                     href={`/kakao/webtoon/${t.content_id}`}
@@ -165,6 +172,35 @@ export default async function KakaoHomePage({
                     )}
                     <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
                   </Link>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {result.studioFixNeeded.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-3 flex items-baseline gap-2 text-sm font-semibold text-neutral-500">
+                제작사 정보 필요
+                <span className="text-xs text-neutral-400">{result.studioFixNeeded.length}개</span>
+              </h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+                {result.studioFixNeeded.map((t) => (
+                  <div key={t.content_id} className="rounded-lg border border-neutral-200 bg-white p-2">
+                    <Link href={`/kakao/webtoon/${t.content_id}`}>
+                      {t.thumbnail_url && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={t.thumbnail_url}
+                          alt=""
+                          width={112}
+                          height={145}
+                          className="mb-2 h-auto w-full rounded"
+                        />
+                      )}
+                      <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                    </Link>
+                    <KakaoStudioNameEditor contentId={t.content_id} studioName={null} readOnly={readOnly} />
+                  </div>
                 ))}
               </div>
             </section>

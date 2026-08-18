@@ -14,6 +14,7 @@ loadEnv();
 import {
   fetchAllOngoingTitles,
   fetchFinishedTitles,
+  fetchNewTitles,
   fetchTitleProfile,
   fetchViewsAndLikes,
   fetchAllEpisodes,
@@ -62,7 +63,7 @@ function toImageUrl(key: string | undefined): string | null {
   return key ? `${key}.webp` : null;
 }
 
-function titleRowFromCard(card: KakaoCardContent, isFinished: boolean, nowIso: string) {
+function titleRowFromCard(card: KakaoCardContent, isFinished: boolean, isNew: boolean, nowIso: string) {
   return {
     content_id: card.id,
     seo_id: card.seoId,
@@ -71,6 +72,7 @@ function titleRowFromCard(card: KakaoCardContent, isFinished: boolean, nowIso: s
     is_adult: card.adult ?? false,
     is_finished: isFinished,
     is_on_hiatus: card.rest ?? false,
+    is_new: isNew,
     is_active: true,
     last_seen_at: nowIso,
   };
@@ -103,6 +105,7 @@ async function collectTitleDetail(
         title_name: card.title,
         writer: profile.writers.join(", ") || null,
         painter: profile.painters.join(", ") || null,
+        origin_author: profile.originAuthors.join(", ") || null,
         studio_name: profile.publishers.join(", ") || null,
         synopsis: profile.synopsis || null,
         // 요일별 목록(card.genreFilters)은 세션 상태에 따라 빠지는 경우가 있어(README 상단 참고)
@@ -165,14 +168,16 @@ async function main() {
   const hasDb = !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
   const snapshotDate = getKstDateString();
 
-  console.log(`[1/4] 연재중 작품 목록 + 완결 작품 목록 조회...`);
+  console.log(`[1/4] 연재중 작품 목록 + 완결 작품 목록 + 신작 목록 조회...`);
   const ongoingTitles = await fetchAllOngoingTitles();
   const finishedTitlesRaw = await fetchFinishedTitles();
+  const newTitlesRaw = await fetchNewTitles();
+  const newIds = new Set(newTitlesRaw.map((t) => t.id));
   const ongoingIds = new Set(ongoingTitles.map((t) => t.id));
   const finishedTitles = finishedTitlesRaw.filter((t) => !ongoingIds.has(t.id));
   const titles = titleLimit ? ongoingTitles.slice(0, titleLimit) : ongoingTitles;
   console.log(
-    `  연재중 ${ongoingTitles.length}개 + 완결 ${finishedTitles.length}개 중 연재중 ${titles.length}개 처리 대상${
+    `  연재중 ${ongoingTitles.length}개 + 완결 ${finishedTitles.length}개 + 신작 ${newIds.size}개 중 연재중 ${titles.length}개 처리 대상${
       titleLimit ? " (TITLE_LIMIT 적용)" : ""
     }`
   );
@@ -183,7 +188,7 @@ async function main() {
     supabase = getSupabaseAdmin();
 
     const nowIso = new Date().toISOString();
-    const titleRows = titles.map((t) => titleRowFromCard(t, false, nowIso));
+    const titleRows = titles.map((t) => titleRowFromCard(t, false, newIds.has(t.id), nowIso));
     for (const batch of chunk(titleRows, 500)) {
       const { error } = await supabase.from("kakao_titles").upsert(batch, { onConflict: "content_id" });
       if (error) console.error("  kakao_titles upsert 실패:", error.message);
@@ -239,7 +244,7 @@ async function main() {
     console.log(`  마감 시각(KST 08:10): ${new Date(deadline).toISOString()}`);
 
     const nowIso = new Date().toISOString();
-    const finishedRows = finishedTitles.map((t) => titleRowFromCard(t, true, nowIso));
+    const finishedRows = finishedTitles.map((t) => titleRowFromCard(t, true, newIds.has(t.id), nowIso));
     for (const batch of chunk(finishedRows, 500)) {
       const { error } = await supabase.from("kakao_titles").upsert(batch, { onConflict: "content_id" });
       if (error) console.error("  완결작 kakao_titles upsert 실패:", error.message);

@@ -135,10 +135,16 @@ export async function fetchFinishedTitles(): Promise<KakaoCardContent[]> {
   return fetchTimetable("timetable_completed");
 }
 
+/** 신작으로 분류된 작품 전체 목록 (사이트의 "신작" 탭과 동일한 카테고리, 페이지네이션 없음) */
+export async function fetchNewTitles(): Promise<KakaoCardContent[]> {
+  return fetchTimetable("timetable_new");
+}
+
 export interface KakaoTitleProfile {
   synopsis: string;
   writers: string[];
   painters: string[];
+  originAuthors: string[]; // 원작 (ORIGINAL_STORY 타입)
   publishers: string[]; // 제작사/스튜디오 표기 (PUBLISHER 타입)
   seoKeywords: string[];
   isFinished: boolean;
@@ -154,7 +160,7 @@ interface ProfileResponse {
   };
 }
 
-/** 작품 상세(시놉시스, 글/그림/제작사 작가, 키워드, 완결여부, 연령등급) */
+/** 작품 상세(시놉시스, 글/그림/원작/제작사 작가, 키워드, 완결여부, 연령등급) */
 export async function fetchTitleProfile(contentId: number): Promise<KakaoTitleProfile> {
   const res = await fetchJsonWithRetry<ProfileResponse>(
     `https://gateway-kw.kakao.com/decorator/v2/decorator/contents/${contentId}/profile`
@@ -162,10 +168,12 @@ export async function fetchTitleProfile(contentId: number): Promise<KakaoTitlePr
   const d = res.data;
   const writers: string[] = [];
   const painters: string[] = [];
+  const originAuthors: string[] = [];
   const publishers: string[] = [];
   for (const a of d.authors ?? []) {
     if (a.type === "AUTHOR") writers.push(a.name);
     if (a.type === "ILLUSTRATOR") painters.push(a.name);
+    if (a.type === "ORIGINAL_STORY") originAuthors.push(a.name);
     if (a.type === "PUBLISHER") publishers.push(a.name);
   }
   const badges = d.badges ?? [];
@@ -175,6 +183,7 @@ export async function fetchTitleProfile(contentId: number): Promise<KakaoTitlePr
     synopsis: d.synopsis ?? "",
     writers,
     painters,
+    originAuthors,
     publishers,
     seoKeywords: d.seoKeywords ?? [],
     isFinished,

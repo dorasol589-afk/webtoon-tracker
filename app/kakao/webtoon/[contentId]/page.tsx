@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { getKakaoTitle, getKakaoEpisodes, getKakaoStatHistory } from "@/lib/queries";
+import { hasAdminAccess } from "@/lib/supabase";
 import KakaoStatChart from "./KakaoStatChart";
+import KakaoStudioNameEditor from "@/app/kakao/KakaoStudioNameEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +23,7 @@ export default async function KakaoTitlePage({
 
   const title = await getKakaoTitle(id);
   if (!title) notFound();
+  const readOnly = !hasAdminAccess();
 
   const [episodes, statHistory] = await Promise.all([getKakaoEpisodes(id), getKakaoStatHistory(id)]);
   const latestStat = statHistory.at(-1);
@@ -50,9 +53,19 @@ export default async function KakaoTitlePage({
             </a>
           </h1>
           <p className="text-sm text-neutral-500">
-            {[title.writer, title.painter].filter((v, i, arr) => v && arr.indexOf(v) === i).join(" / ")}
+            {[title.writer, title.painter, title.origin_author]
+              .filter((v, i, arr) => v && arr.indexOf(v) === i)
+              .join(" / ")}
           </p>
-          {title.studio_name && <p className="text-xs text-neutral-400">{title.studio_name}</p>}
+          <div className="mt-1 flex items-center gap-1 text-xs text-neutral-400">
+            제작사:
+            <KakaoStudioNameEditor contentId={id} studioName={title.studio_name} readOnly={readOnly} />
+          </div>
+          {title.is_new && (
+            <span className="mt-1 mr-1 inline-block rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">
+              신작
+            </span>
+          )}
           {title.is_adult && (
             <span className="mt-1 mr-1 inline-block rounded bg-rose-100 px-2 py-0.5 text-xs text-rose-700">
               성인
