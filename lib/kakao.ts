@@ -201,7 +201,9 @@ export interface KakaoStats {
 // 실제로 확인함(동시 8개 정도로만 돌려도 100건 안쪽에서 차단, 이후 몇 분간 단건 요청도 계속 403).
 // 그래서 이 페이지에 대한 요청만 전역으로 직렬화 + 최소 간격을 둬서, 수집기가 몇 개 동시성으로
 // 돌든 실제 웹 요청은 항상 느리게 하나씩만 나가게 강제한다.
-const CONTENT_PAGE_MIN_INTERVAL_MS = 2000;
+// 간격은 KAKAO_CONTENT_PAGE_INTERVAL_MS로 오버라이드 가능 - 매일 도는 수집기는 기본 2초로 충분히
+// 안정적이었지만, 대량 백필처럼 짧은 시간에 훨씬 많은 요청을 몰아 보낼 때는 더 넉넉한 간격이 필요함.
+const CONTENT_PAGE_MIN_INTERVAL_MS = Number(process.env.KAKAO_CONTENT_PAGE_INTERVAL_MS) || 2000;
 let contentPageLastFetchAt = 0;
 let contentPageQueue: Promise<unknown> = Promise.resolve();
 
