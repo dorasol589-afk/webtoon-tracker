@@ -219,21 +219,56 @@ function scheduleContentPageFetch<T>(run: () => Promise<T>): Promise<T> {
   return scheduled;
 }
 
+// 작품 홈 페이지(SSR HTML) 안에는 Next.js가 심어둔 상태 JSON이 있고, 그 안의 contentMap[id]에
+// viewCount/likeCount(정확한 정수)와 mainImg(진짜 표지)가 전부 들어있다. 처음엔 화면에 보이는
+// <p> 텍스트("8.4만" 같은 축약 표기)와 <picture><source> 마크업을 정규식으로 긁었는데, 이 마크업이
+// 작품마다(특히 오래된/일부 작품) 구조가 달라 매칭이 자주 실패하는 걸 확인했다 - IP 차단인 줄
+// 알았는데 실제로는 이 정규식 불일치였다. contentMap 값을 우선 쓰고, 혹시 못 찾으면(페이지 구조가
+// 또 바뀐 경우) 예전 방식으로 폴백한다.
+//
+// authorDetails/univCollections 같은 중첩 배열까지 파싱할 필요는 없고 앞쪽 필드 몇 개만 있으면
+// 되므로, 다음 형제 엔트리("숫자":{"id":숫자, 가 다시 나오는 지점)가 나오기 전까지만 잘라내
+// 그 구간 안에서 정규식으로 값을 뽑는다(다른 작품 엔트리의 값과 섞이는 걸 방지).
+function extractContentMapEntry(html: string, contentId: number): string | null {
+  const anchor = `"${contentId}":{"id":${contentId},`;
+  const start = html.indexOf(anchor);
+  if (start === -1) return null;
+  const siblingRe = /"\d+":\{"id":\d+,/g;
+  siblingRe.lastIndex = start + anchor.length;
+  const next = siblingRe.exec(html);
+  const end = next ? next.index : Math.min(html.length, start + 5000);
+  return html.slice(start, end);
+}
+
+// mainImg는 ".../{hash}.webp.png" 형태로 내려오는데 이 그대로 요청하면 404가 난다(실제 확인함).
+// 확장자를 떼고 .webp를 새로 붙여야 CDN이 정상 응답한다(기존 titleImageB 처리와 동일한 규칙).
+function toCoverImageUrl(mainImg: string): string {
+  return mainImg.replace(/\.(webp\.png|webp|png|jpg)$/, "") + ".webp";
+}
+
 /**
- * 작품 조회수/좋아요수는 별도 JSON API가 없고 작품 홈 페이지(SSR HTML)에 직접 렌더링되어 있어
- * 서버 렌더링된 HTML을 그대로 파싱해서 가져온다(lib/naver.ts의 시리즈 다운로드수 스크래핑과 동일 패턴).
- * 헤더 영역에 장르 -> 조회수(눈 아이콘) -> 좋아요수(따봉 아이콘) 순서로 <p> 3개가 연달아 나온다.
- * 형식이 안 맞으면(작품 정보가 없거나 페이지 구조가 바뀐 경우) null로 반환 - 0으로 조용히
- * 대체하지 않아야 급락 오인 사고를 막을 수 있음.
- *
- * 표지 이미지도 이 페이지에서 같이 뽑아온다: 목록 API(timetables)의 titleImageB는 제목 텍스트만
- * 박힌 배너 플레이스홀더로 바뀌어 있어(모든 작품 공통, 신작만의 문제가 아님 - 실제 확인함) 썸네일로
- * 못 쓴다. 진짜 표지는 상세페이지의 <picture><source type="image/webp" srcSet="...c1/..."/> 에만
- * 있어서, 어차피 뜨는 이 HTML을 재사용해 추출한다(추가 요청 없음).
+ * 작품 조회수/좋아요수/표지 이미지 조회. 형식이 안 맞으면(작품 정보가 없거나 페이지 구조가
+ * 완전히 바뀐 경우) null로 반환 - 0으로 조용히 대체하지 않아야 급락 오인 사고를 막을 수 있음.
  */
 export async function fetchViewsAndLikes(seoId: string, contentId: number): Promise<KakaoStats> {
   const url = `https://webtoon.kakao.com/content/${encodeURIComponent(seoId)}/${contentId}`;
   const html = await scheduleContentPageFetch(() => fetchTextWithRetry(url));
+
+  const entry = extractContentMapEntry(html, contentId);
+  if (entry) {
+    const viewMatch = entry.match(/"viewCount":(\d+)/);
+    const likeMatch = entry.match(/"likeCount":(\d+)/);
+    const mainImgMatch = entry.match(/"mainImg":"([^"]+)"/);
+    if (viewMatch && likeMatch) {
+      return {
+        viewCount: parseInt(viewMatch[1], 10),
+        likeCount: parseInt(likeMatch[1], 10),
+        coverImageUrl: mainImgMatch ? toCoverImageUrl(mainImgMatch[1]) : null,
+      };
+    }
+  }
+
+  // 폴백: contentMap JSON을 못 찾은 경우에만 예전 방식(화면 텍스트 스크래핑) 사용
   const re =
     /<p class="whitespace-pre-wrap break-all break-words support-break-word s12-regular-white ml-2 opacity-75">([^<]+)<\/p>/g;
   const matches = [...html.matchAll(re)].map((m) => m[1]);
