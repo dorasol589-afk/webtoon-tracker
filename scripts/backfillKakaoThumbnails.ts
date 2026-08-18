@@ -9,15 +9,34 @@ import pLimit from "p-limit";
 import { fetchViewsAndLikes } from "../lib/kakao";
 import { getSupabaseAdmin } from "../lib/supabase";
 
+// PostgREST 기본 응답 상한이 1000행이라 단일 select로는 일부만 돌아온다(export_titles_data_unified와
+// 동일하게 겪었던 문제) - range로 페이지네이션해서 전량을 가져온다.
+async function fetchAllActiveTitles(supabase: ReturnType<typeof getSupabaseAdmin>) {
+  const pageSize = 1000;
+  const all: { content_id: number; seo_id: string; title_name: string; thumbnail_url: string | null }[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("kakao_titles")
+      .select("content_id, seo_id, title_name, thumbnail_url")
+      .eq("is_active", true)
+      .order("content_id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    all.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return all;
+}
+
 async function main() {
   const supabase = getSupabaseAdmin();
-  const { data: titles, error } = await supabase
-    .from("kakao_titles")
-    .select("content_id, seo_id, title_name")
-    .eq("is_active", true)
-    .order("content_id", { ascending: true });
-  if (error) throw error;
-  console.log(`대상 ${titles.length}개 (2초 간격 직렬 처리라 예상 소요: 약 ${Math.round((titles.length * 2) / 60)}분)`);
+  const allTitles = await fetchAllActiveTitles(supabase);
+  // 이미 진짜 표지(c1)로 교정된 건 재조회하지 않는다 - 재시도 시 이미 성공한 것까지
+  // 다시 훑느라 시간을 낭비하고 IP 차단 위험만 키우게 됨
+  const titles = allTitles.filter((t) => !t.thumbnail_url || !t.thumbnail_url.includes("/c1/"));
+  console.log(
+    `전체 ${allTitles.length}개 중 대상 ${titles.length}개 (이미 교정됨 ${allTitles.length - titles.length}개 제외, 2초 간격 직렬 처리라 예상 소요: 약 ${Math.round((titles.length * 2) / 60)}분)`
+  );
 
   let done = 0;
   let updated = 0;
