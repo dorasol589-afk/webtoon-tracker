@@ -1,7 +1,7 @@
 // 자연어 요청("2026.05~07 런칭된 판타지 신작을 다운로드수대로 그래프로")을 그래프 사양으로
 // 해석하는 레이어. Claude API로 자연어를 구조화하고, 실제 데이터는 export_titles_data_unified를
 // 재사용해 조회한다(엑셀 내보내기와 같은 데이터 소스 - 필드가 이미 검증돼 있음).
-import { getExportTitlesDataUnified, getTagStats, type ExportTitleRowUnified } from "./queries";
+import { getExportTitlesDataUnified, getTagStats, getTitlesByStudio, type ExportTitleRowUnified } from "./queries";
 
 export interface ChartSpec {
   chartType: "bar" | "pie";
@@ -16,6 +16,7 @@ export interface ChartSpec {
   sortDirection: "desc" | "asc";
   limit: number;
   groupBy: "title" | "genre" | "studio" | "weekday" | "launch_month" | null;
+  exclude: string[] | null;
 }
 
 export interface ChartDataPoint {
@@ -44,6 +45,7 @@ const SYSTEM_PROMPT = `당신은 웹툰(네이버웹툰/카카오웹툰) 통계 
 - limit: 표시할 항목 수. 명시 없으면 개별 작품 랭킹은 15, 그룹별 집계는 10.
 - groupBy: null(개별 작품별 랭킹, 예: "다운로드수 많은 순으로") / genre(장르별 합계) / studio(제작사별 합계) / weekday(요일별 합계, 네이버 전용) / launch_month(월별 합계). "장르별 합계/비율/분포"처럼 카테고리로 묶어달라는 요청일 때만 null이 아닌 값을 쓰세요.
 - chartType: bar(막대, 기본값 - 랭킹/비교에 적합) / pie(파이, 전체 대비 비율/구성비를 물을 때만 - 예: "장르별 비율", "구성비"). 랭킹이면 무조건 bar.
+- exclude: 결과에서 빼고 싶은 이름 목록 (예: "'개인' 빼고" → ["개인"], "무료 연재 제외" → ["무료 연재"]). 없으면 빈 배열.
 - title: 그래프 제목 (한국어, 간결하게).
 
 애매하면 사용자의 표현에 가장 가까운 값을 고르고, 절대 데이터에 없는 필드를 지어내지 마세요.`;
@@ -69,6 +71,7 @@ const TOOL_SCHEMA = {
       sortDirection: { type: "string", enum: ["desc", "asc"] },
       limit: { type: "number" },
       groupBy: { type: ["string", "null"], enum: ["title", "genre", "studio", "weekday", "launch_month", null] },
+      exclude: { type: "array", items: { type: "string" } },
     },
     required: [
       "chartType",
@@ -83,6 +86,7 @@ const TOOL_SCHEMA = {
       "sortDirection",
       "limit",
       "groupBy",
+      "exclude",
     ],
   },
 };
@@ -121,6 +125,7 @@ async function interpretChartRequestAI(query: string): Promise<ChartSpec> {
   return {
     ...input,
     limit: Math.min(Math.max(Number(input.limit) || 15, 1), 30),
+    exclude: Array.isArray(input.exclude) && input.exclude.length > 0 ? input.exclude : null,
   };
 }
 
@@ -203,8 +208,18 @@ function interpretChartRequestRuleBased(query: string): ChartSpec {
   const chartType: ChartSpec["chartType"] =
     q.includes("비율") || q.includes("비중") || q.includes("구성비") || q.includes("파이") ? "pie" : "bar";
 
-  const limitMatch = q.match(/상위\s?(\d+)|(\d+)\s?개/);
-  const limit = limitMatch ? Number(limitMatch[1] ?? limitMatch[2]) : groupBy ? 10 : 15;
+  const limitMatch = q.match(/상위\s?(\d+)|top\s?(\d+)|(\d+)\s?개/i);
+  const limit = limitMatch ? Number(limitMatch[1] ?? limitMatch[2] ?? limitMatch[3]) : groupBy ? 10 : 15;
+
+  // "'개인' 빼고", "개인 제외하고" 처럼 결과에서 뺄 이름을 찾는다. 따옴표로 감싼 표현을 우선 보고,
+  // 없으면 제외 동사 바로 앞 단어를 후보로 삼는다.
+  const exclude: string[] = [];
+  const quotedExcludeRe = /['"“”‘’]([^'"“”‘’]+)['"“”‘’]\s*(?:은|는|을|를)?\s*(?:빼고|제외|제외하고|빼줘|빼주세요)/g;
+  for (const m of q.matchAll(quotedExcludeRe)) exclude.push(m[1]);
+  if (exclude.length === 0) {
+    const plainExcludeRe = /([가-힣A-Za-z0-9]+)\s*(?:은|는|을|를)?\s*(?:빼고|제외하고|제외|빼줘|빼주세요)/g;
+    for (const m of q.matchAll(plainExcludeRe)) exclude.push(m[1]);
+  }
 
   const titleParts = [
     dateFrom || dateTo ? `${dateFrom ?? ""}~${dateTo ?? ""}` : null,
@@ -213,6 +228,7 @@ function interpretChartRequestRuleBased(query: string): ChartSpec {
     groupBy ? "그룹별" : null,
     metricLabel,
     sortDirection === "asc" ? "낮은 순" : "높은 순",
+    exclude.length > 0 ? `(${exclude.join(", ")} 제외)` : null,
   ].filter(Boolean);
 
   return {
@@ -227,6 +243,7 @@ function interpretChartRequestRuleBased(query: string): ChartSpec {
     metricLabel,
     sortDirection,
     limit: Math.min(Math.max(limit, 1), 30),
+    exclude: exclude.length > 0 ? exclude : null,
     groupBy,
   };
 }
@@ -277,13 +294,53 @@ function canUseFastGenreCount(spec: ChartSpec): boolean {
   );
 }
 
+// "제작사별 다운로드수/조회수" 요청도 마찬가지 이유로 무겁다 - 제작사 탭에서 이미 쓰던
+// getTitlesByStudio()(현재 누적 기준, 작품당 최신 스냅샷만 조인)로 충분히 빠르게 계산된다.
+// 날짜범위/장르 필터나 완결·연재중 구분이 걸린 요청은 이 함수가 지원 못 해서 무거운 경로로 내려간다.
+function canUseFastStudioTotal(spec: ChartSpec): boolean {
+  return (
+    spec.groupBy === "studio" &&
+    (spec.metric === "download_count" || spec.metric === "view_count") &&
+    !spec.genre &&
+    !spec.dateFrom &&
+    !spec.dateTo &&
+    spec.status === "all"
+  );
+}
+
+function applyExclude(points: ChartDataPoint[], exclude: string[] | null): ChartDataPoint[] {
+  if (!exclude || exclude.length === 0) return points;
+  const excludeNormalized = exclude.map(normalizeForMatch);
+  return points.filter((p) => !excludeNormalized.some((ex) => normalizeForMatch(p.name).includes(ex)));
+}
+
 export async function buildChartData(spec: ChartSpec): Promise<ChartResult> {
   if (canUseFastGenreCount(spec)) {
-    const stats = await getTagStats("GENRE", spec.limit);
-    const points = stats
-      .map((s) => ({ name: s.tag_name, value: s.title_count }))
-      .sort((a, b) => (spec.sortDirection === "asc" ? a.value - b.value : b.value - a.value));
+    const stats = await getTagStats("GENRE", 30);
+    let points = applyExclude(
+      stats.map((s) => ({ name: s.tag_name, value: s.title_count })),
+      spec.exclude
+    );
+    points.sort((a, b) => (spec.sortDirection === "asc" ? a.value - b.value : b.value - a.value));
     const matchedCount = points.reduce((sum, p) => sum + p.value, 0);
+    points = points.slice(0, spec.limit);
+    return { spec, data: points, matchedCount };
+  }
+
+  if (canUseFastStudioTotal(spec)) {
+    const groups = await getTitlesByStudio();
+    let points = applyExclude(
+      groups
+        .map((g) => ({
+          name: g.studioName,
+          value: spec.metric === "download_count" ? g.totalDownloadCount : g.totalViewCount,
+        }))
+        .filter((p) => p.value > 0),
+      spec.exclude
+    );
+    points.sort((a, b) => (spec.sortDirection === "asc" ? a.value - b.value : b.value - a.value));
+    const matchedCount = points.length;
+    points = points.slice(0, spec.limit);
     return { spec, data: points, matchedCount };
   }
 
@@ -314,6 +371,7 @@ export async function buildChartData(spec: ChartSpec): Promise<ChartResult> {
     points = [...sums.entries()].map(([name, value]) => ({ name, value }));
   }
 
+  points = applyExclude(points, spec.exclude);
   points.sort((a, b) => (spec.sortDirection === "asc" ? a.value - b.value : b.value - a.value));
   points = points.slice(0, spec.limit);
 
