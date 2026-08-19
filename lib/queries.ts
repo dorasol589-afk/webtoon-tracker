@@ -906,15 +906,58 @@ async function enrichStudioTitleRows(titles: StudioTitleRow[]): Promise<ExportTi
     }
     for (const n of notesRows ?? []) notesByTitle.set(n.title_id, n);
 
-    const lastDate = latestDate?.[0]?.snapshot_date;
+    const lastDate = latestDate?.[0]?.snapshot_date as string | undefined;
     if (lastDate) {
-      const { data: commentRows } = await supabase
-        .from("comment_snapshots")
-        .select("title_id,comment_count")
-        .eq("snapshot_date", lastDate)
-        .in("title_id", naverIds);
-      for (const c of commentRows ?? []) {
-        commentByTitle.set(c.title_id, (commentByTitle.get(c.title_id) ?? 0) + c.comment_count);
+      const PAGE_SIZE = 1000;
+      // 1단계: 전체 최신 날짜 기준으로 한 번에 조회 (연재중인 작품 대다수는 이걸로 끝남).
+      // 작품당 회차 수가 많으면 행 수가 PostgREST 기본 상한(1000)을 넘어 뒤쪽 작품들의 댓글
+      // 합계가 조용히 0으로 빠지는 문제가 실제로 있었다 - 페이지네이션으로 수정.
+      for (let offset = 0; ; offset += PAGE_SIZE) {
+        const { data: commentRows, error } = await supabase
+          .from("comment_snapshots")
+          .select("title_id,comment_count")
+          .eq("snapshot_date", lastDate)
+          .in("title_id", naverIds)
+          .range(offset, offset + PAGE_SIZE - 1);
+        if (error) break;
+        for (const c of commentRows ?? []) {
+          commentByTitle.set(c.title_id, (commentByTitle.get(c.title_id) ?? 0) + c.comment_count);
+        }
+        if (!commentRows || commentRows.length < PAGE_SIZE) break;
+      }
+
+      // 2단계: 완결작은 밤샘 수집기가 더 이상 돌지 않아(연재중인 작품만 수집 - 원래 설계)
+      // 전체 최신 날짜엔 스냅샷이 없다. 1단계에서 못 찾은 나머지(보통 완결작 소수)만 대상으로
+      // 각자의 가장 최근 날짜를 구하는데, (title_id, no, snapshot_date desc) 인덱스를 타도록
+      // 작품마다 별도의 작은 쿼리로 조회한다 - 전체를 date desc로 훑으면(페이지네이션) 대상
+      // 작품들의 오래된 히스토리 전체를 다 넘겨야 해서 훨씬 느리다 (실측: 53페이지/2.7초 대
+      // 병렬 소쿼리는 수백ms 수준).
+      const missingIds = naverIds.filter((id) => !commentByTitle.has(id));
+      if (missingIds.length > 0) {
+        const latestDates = await Promise.all(
+          missingIds.map(async (id) => {
+            const { data } = await supabase
+              .from("comment_snapshots")
+              .select("snapshot_date")
+              .eq("title_id", id)
+              .order("snapshot_date", { ascending: false })
+              .limit(1);
+            return { id, date: data?.[0]?.snapshot_date as string | undefined };
+          })
+        );
+        await Promise.all(
+          latestDates
+            .filter((d): d is { id: number; date: string } => !!d.date)
+            .map(async ({ id, date }) => {
+              const { data } = await supabase
+                .from("comment_snapshots")
+                .select("comment_count")
+                .eq("title_id", id)
+                .eq("snapshot_date", date);
+              const sum = (data ?? []).reduce((acc, r) => acc + r.comment_count, 0);
+              commentByTitle.set(id, sum);
+            })
+        );
       }
     }
   }
