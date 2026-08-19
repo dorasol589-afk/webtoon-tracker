@@ -64,11 +64,17 @@ export default async function StudioDetailPage({
             studio.studioName
           )}
         </h1>
-        <p className="text-sm text-neutral-400">
+        <p className="mb-3 text-sm text-neutral-400">
           작품 {studio.titles.length}개
           {studio.totalDownloadCount > 0 && ` · 네이버 누적 다운로드 ${formatManwon(studio.totalDownloadCount)}`}
           {studio.totalViewCount > 0 && ` · 카카오 누적 조회수 ${formatManwon(studio.totalViewCount)}`}
         </p>
+        <a
+          href={`/api/export/studios/${encodeURIComponent(studioName)}`}
+          className="inline-block rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
+        >
+          엑셀 다운로드
+        </a>
       </div>
 
       <div className="mb-6 flex gap-2">
