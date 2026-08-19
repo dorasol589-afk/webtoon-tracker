@@ -216,19 +216,32 @@ export async function getExportTitlesDataUnified(opts: {
   const PAGE_SIZE = 1000;
   const all: ExportTitleRowUnified[] = [];
   for (let offset = 0; ; offset += PAGE_SIZE) {
-    const { data, error } = await supabase
-      .rpc("export_titles_data_unified", {
-        filter_platform: opts.platform ?? "all",
-        filter_status: opts.status ?? "all",
-        filter_type: opts.type ?? "all",
-        filter_adult_only: opts.adultOnly ?? false,
-        filter_launch_from: opts.launchFrom ?? null,
-        filter_launch_to: opts.launchTo ?? null,
-        sort_by: opts.sortBy ?? "name",
-      })
-      .range(offset, offset + PAGE_SIZE - 1);
-    if (error) throw error;
-    const rows = (data ?? []) as ExportTitleRowUnified[];
+    // export_titles_data_unified가 네이버+카카오를 통째로 훑는 무거운 쿼리라 anon 롤의 짧은
+    // statement_timeout에 가끔(불규칙하게) 걸리는 걸 실제로 겪었다 - 몇 번 재시도하면 대체로
+    // 통과해서(부하 변동성으로 보임) 재시도로 흡수한다.
+    let rows: ExportTitleRowUnified[] | null = null;
+    let lastError: { code?: string; message: string } | null = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 400 * attempt));
+      const { data, error } = await supabase
+        .rpc("export_titles_data_unified", {
+          filter_platform: opts.platform ?? "all",
+          filter_status: opts.status ?? "all",
+          filter_type: opts.type ?? "all",
+          filter_adult_only: opts.adultOnly ?? false,
+          filter_launch_from: opts.launchFrom ?? null,
+          filter_launch_to: opts.launchTo ?? null,
+          sort_by: opts.sortBy ?? "name",
+        })
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (!error) {
+        rows = (data ?? []) as ExportTitleRowUnified[];
+        break;
+      }
+      lastError = error;
+      if (error.code !== "57014") break; // statement timeout 외의 에러는 재시도해도 소용없음
+    }
+    if (rows === null) throw lastError;
     all.push(...rows);
     if (rows.length < PAGE_SIZE) break;
   }
