@@ -848,6 +848,172 @@ export async function getStudioTitles(studioName: string): Promise<StudioGroup |
   };
 }
 
+/**
+ * 제작사 엑셀 다운로드용 - export_titles_data_unified와 같은 컬럼을 채우되, 전체 카탈로그를
+ * 훑는 무거운 쿼리 대신 대상 작품 id로만 좁힌 가벼운 조회 여러 개로 조합한다.
+ * (export_titles_data_unified를 그대로 쓰고 JS에서 studio_name으로 걸러내는 방식은 실제로
+ * anon 롤 statement_timeout을 자주 일으켜서 - 확인함 - 이 방식으로 바꿈)
+ * getExportTitlesForStudio(제작사 1곳)와 getExportTitlesForAllStudios(전체)가 공유.
+ */
+async function enrichStudioTitleRows(titles: StudioTitleRow[]): Promise<ExportTitleRowUnified[]> {
+  const supabase = getSupabaseAnon();
+  const naverIds = titles.filter((t) => t.platform === "naver").map((t) => t.id);
+  const kakaoIds = titles.filter((t) => t.platform === "kakao").map((t) => t.id);
+
+  const naverExtra = new Map<
+    number,
+    {
+      is_finished: boolean;
+      is_on_hiatus: boolean;
+      is_adult: boolean;
+      age_rating: string | null;
+      writer: string | null;
+      painter: string | null;
+      origin_author: string | null;
+    }
+  >();
+  const genreByTitle = new Map<number, string>();
+  const launchByTitle = new Map<number, string>();
+  const commentByTitle = new Map<number, number>();
+  const notesByTitle = new Map<
+    number,
+    { subject: string | null; logline: string | null; target_audience: string | null; comment: string | null }
+  >();
+
+  if (naverIds.length > 0) {
+    const [{ data: titleRows }, { data: tagRows }, { data: episodeRows }, { data: notesRows }, { data: latestDate }] =
+      await Promise.all([
+        supabase
+          .from("titles")
+          .select("title_id,is_finished,is_on_hiatus,is_adult,age_rating,writer,painter,origin_author")
+          .in("title_id", naverIds),
+        supabase.from("title_tags").select("title_id,tag_name").eq("tag_type", "GENRE").in("title_id", naverIds),
+        supabase.from("episodes").select("title_id,service_date").in("title_id", naverIds),
+        supabase
+          .from("title_notes")
+          .select("title_id,subject,logline,target_audience,comment")
+          .in("title_id", naverIds),
+        supabase.from("comment_snapshots").select("snapshot_date").order("snapshot_date", { ascending: false }).limit(1),
+      ]);
+    for (const t of titleRows ?? []) naverExtra.set(t.title_id, t);
+    for (const t of tagRows ?? []) {
+      genreByTitle.set(t.title_id, [genreByTitle.get(t.title_id), t.tag_name].filter(Boolean).join(", "));
+    }
+    for (const e of episodeRows ?? []) {
+      if (!e.service_date) continue;
+      const cur = launchByTitle.get(e.title_id);
+      if (!cur || e.service_date < cur) launchByTitle.set(e.title_id, e.service_date);
+    }
+    for (const n of notesRows ?? []) notesByTitle.set(n.title_id, n);
+
+    const lastDate = latestDate?.[0]?.snapshot_date;
+    if (lastDate) {
+      const { data: commentRows } = await supabase
+        .from("comment_snapshots")
+        .select("title_id,comment_count")
+        .eq("snapshot_date", lastDate)
+        .in("title_id", naverIds);
+      for (const c of commentRows ?? []) {
+        commentByTitle.set(c.title_id, (commentByTitle.get(c.title_id) ?? 0) + c.comment_count);
+      }
+    }
+  }
+
+  const kakaoExtra = new Map<
+    number,
+    {
+      is_finished: boolean;
+      is_on_hiatus: boolean;
+      is_adult: boolean;
+      age_rating: string | null;
+      writer: string | null;
+      painter: string | null;
+      origin_author: string | null;
+      genres: string[] | null;
+    }
+  >();
+  if (kakaoIds.length > 0) {
+    const { data: kakaoRows } = await supabase
+      .from("kakao_titles")
+      .select("content_id,is_finished,is_on_hiatus,is_adult,age_rating,writer,painter,origin_author,genres")
+      .in("content_id", kakaoIds);
+    for (const t of kakaoRows ?? []) kakaoExtra.set(t.content_id, t);
+  }
+
+  return titles.map((t): ExportTitleRowUnified => {
+    if (t.platform === "naver") {
+      const extra = naverExtra.get(t.id);
+      const notes = notesByTitle.get(t.id);
+      return {
+        id: t.id,
+        platform: "naver",
+        title_name: t.title_name,
+        weekday: t.weekday,
+        is_adult: extra?.is_adult ?? false,
+        age_rating: extra?.age_rating ?? null,
+        writer: extra?.writer ?? null,
+        painter: extra?.painter ?? null,
+        origin_author: extra?.origin_author ?? null,
+        studio_name: t.studio_name,
+        is_finished: extra?.is_finished ?? false,
+        is_on_hiatus: extra?.is_on_hiatus ?? false,
+        star_score: t.star_score,
+        popularity_rank: t.popularity_rank,
+        launch_date: launchByTitle.get(t.id) ?? null,
+        total_comment_count: commentByTitle.get(t.id) ?? null,
+        download_count: t.download_count,
+        view_count: null,
+        like_count: null,
+        genre: genreByTitle.get(t.id) ?? null,
+        subject: notes?.subject ?? null,
+        logline: notes?.logline ?? null,
+        target_audience: notes?.target_audience ?? null,
+        comment: notes?.comment ?? null,
+      };
+    }
+    const extra = kakaoExtra.get(t.id);
+    return {
+      id: t.id,
+      platform: "kakao",
+      title_name: t.title_name,
+      weekday: null,
+      is_adult: extra?.is_adult ?? false,
+      age_rating: extra?.age_rating ?? null,
+      writer: extra?.writer ?? null,
+      painter: extra?.painter ?? null,
+      origin_author: extra?.origin_author ?? null,
+      studio_name: t.studio_name,
+      is_finished: extra?.is_finished ?? false,
+      is_on_hiatus: extra?.is_on_hiatus ?? false,
+      star_score: null,
+      popularity_rank: null,
+      launch_date: null,
+      total_comment_count: null,
+      download_count: null,
+      view_count: t.view_count,
+      like_count: t.like_count,
+      genre: extra?.genres && extra.genres.length > 0 ? extra.genres.join(", ") : null,
+      subject: null,
+      logline: null,
+      target_audience: null,
+      comment: null,
+    };
+  });
+}
+
+/** 제작사 1곳 엑셀 다운로드용 */
+export async function getExportTitlesForStudio(studioName: string): Promise<ExportTitleRowUnified[]> {
+  const studio = await getStudioTitles(studioName);
+  if (!studio) return [];
+  return enrichStudioTitleRows(studio.titles);
+}
+
+/** 제작사별 작품 전체 엑셀 다운로드용(제작사 목록 페이지) */
+export async function getExportTitlesForAllStudios(): Promise<ExportTitleRowUnified[]> {
+  const groups = await getTitlesByStudio();
+  return enrichStudioTitleRows(groups.flatMap((g) => g.titles));
+}
+
 export interface JobPostingRow {
   source: "SARAMIN" | "JOBKOREA";
   postingId: string;
