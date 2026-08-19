@@ -97,16 +97,17 @@ export default function InsightsChart({ result }: { result: ChartResult }) {
     );
   }
 
-  // 기본값: 가로 막대(막대가 옆으로 눕는 형태) - 작품명처럼 긴 라벨이 많을 때 더 읽기 좋음
-  const chartData = [...data].reverse();
-
+  // 기본값: 가로 막대(막대가 옆으로 눕는 형태) - 작품명처럼 긴 라벨이 많을 때 더 읽기 좋음.
+  // Recharts는 category축(YAxis)을 배열 순서 그대로 위에서부터 그린다 - 예전엔 반대로 알고
+  // reverse()를 넣었다가 1등이 맨 아래로 가는 버그가 있었음(실제 확인함). data는 이미
+  // lib/insights.ts에서 정렬 끝난 상태라 그대로 넘기면 됨.
   return (
     <div
       className="rounded-lg border border-neutral-200 bg-white p-4"
-      style={{ height: chartData.length * 32 + 40 }}
+      style={{ height: data.length * 32 + 40 }}
     >
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 32, bottom: 0, left: 0 }}>
+        <BarChart data={data} layout="vertical" margin={{ top: 0, right: 32, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={formatNumber} />
           <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={160} />
