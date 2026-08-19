@@ -7,8 +7,10 @@ import {
   getSeriesProductForTitle,
   getSeriesHistory,
   getTitleNotes,
+  getPopularityRankHistory,
 } from "@/lib/queries";
 import SeriesDownloadChart from "./SeriesDownloadChart";
+import PopularityRankChart from "./PopularityRankChart";
 import TitleNotesForm from "./TitleNotesForm";
 import StudioNameEditor from "@/app/StudioNameEditor";
 import { hasAdminAccess } from "@/lib/supabase";
@@ -43,11 +45,12 @@ export default async function TitlePage({
 
   const seriesProduct = await getSeriesProductForTitle(id);
 
-  const [episodes, snapshot, seriesHistory, titleNotes] = await Promise.all([
+  const [episodes, snapshot, seriesHistory, titleNotes, rankHistory] = await Promise.all([
     getEpisodesWithLatestCount(id),
     getLatestTitleSnapshot(id),
     seriesProduct ? getSeriesHistory(seriesProduct.productNo) : Promise.resolve([]),
     getTitleNotes(id),
+    getPopularityRankHistory(id),
   ]);
 
   const selectedTab = tab === "stats" ? "stats" : "list";
@@ -179,6 +182,14 @@ export default async function TitlePage({
           <SeriesDownloadChart data={seriesHistory} />
         </div>
       )}
+
+      <div className="mb-6">
+        <h2 className="mb-2 text-sm font-semibold text-neutral-500">
+          실시간 인기순위 추이
+          {snapshot?.popularity_rank && <span className="ml-2 text-neutral-800">{snapshot.popularity_rank}위</span>}
+        </h2>
+        <PopularityRankChart data={rankHistory} />
+      </div>
 
       <div className="mb-3 flex gap-1">
         <Link
