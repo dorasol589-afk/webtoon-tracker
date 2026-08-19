@@ -73,6 +73,31 @@ export default function InsightsChart({ result }: { result: ChartResult }) {
     );
   }
 
+  if (spec.barOrientation === "vertical") {
+    // 일반적인 세로 막대(막대가 위로 서는 형태) - 라벨이 길면 겹치니 45도로 기울여서 표시
+    return (
+      <div className="rounded-lg border border-neutral-200 bg-white p-4" style={{ height: 420 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 10, right: 20, bottom: 70, left: 10 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" vertical={false} />
+            <XAxis
+              dataKey="name"
+              tick={{ fontSize: 12 }}
+              angle={-40}
+              textAnchor="end"
+              interval={0}
+              height={70}
+            />
+            <YAxis tick={{ fontSize: 11 }} tickFormatter={formatNumber} width={60} />
+            <Tooltip formatter={(value) => [formatNumber(Number(value)), spec.metricLabel]} />
+            <Bar dataKey="value" fill={CATEGORICAL_PALETTE[0]} radius={[4, 4, 0, 0]} barSize={28} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+
+  // 기본값: 가로 막대(막대가 옆으로 눕는 형태) - 작품명처럼 긴 라벨이 많을 때 더 읽기 좋음
   const chartData = [...data].reverse();
 
   return (

@@ -5,6 +5,8 @@ import { getExportTitlesDataUnified, getTagStats, getTitlesByStudio, type Export
 
 export interface ChartSpec {
   chartType: "bar" | "pie";
+  // bar 전용: horizontal(막대가 옆으로, 라벨 긴 경우 기본값) / vertical(막대가 위로 서는 일반적인 세로 막대)
+  barOrientation: "horizontal" | "vertical";
   title: string;
   platform: "all" | "naver" | "kakao";
   dateFrom: string | null;
@@ -45,6 +47,7 @@ const SYSTEM_PROMPT = `당신은 웹툰(네이버웹툰/카카오웹툰) 통계 
 - limit: 표시할 항목 수. 명시 없으면 개별 작품 랭킹은 15, 그룹별 집계는 10.
 - groupBy: null(개별 작품별 랭킹, 예: "다운로드수 많은 순으로") / genre(장르별 합계) / studio(제작사별 합계) / weekday(요일별 합계, 네이버 전용) / launch_month(월별 합계). "장르별 합계/비율/분포"처럼 카테고리로 묶어달라는 요청일 때만 null이 아닌 값을 쓰세요.
 - chartType: bar(막대, 기본값 - 랭킹/비교에 적합) / pie(파이, 전체 대비 비율/구성비를 물을 때만 - 예: "장르별 비율", "구성비"). 랭킹이면 무조건 bar.
+- barOrientation: chartType이 bar일 때만 의미 있음. horizontal(막대가 옆으로 눕는 형태, 기본값) / vertical(막대가 위로 서는 일반적인 세로 막대그래프 - "세로 막대", "세로로" 라고 명시했을 때만 이 값을 씀). "가로로"라고 하면 horizontal.
 - exclude: 결과에서 빼고 싶은 이름 목록 (예: "'개인' 빼고" → ["개인"], "무료 연재 제외" → ["무료 연재"]). 없으면 빈 배열.
 - title: 그래프 제목 (한국어, 간결하게).
 
@@ -57,6 +60,7 @@ const TOOL_SCHEMA = {
     type: "object" as const,
     properties: {
       chartType: { type: "string", enum: ["bar", "pie"] },
+      barOrientation: { type: "string", enum: ["horizontal", "vertical"] },
       title: { type: "string" },
       platform: { type: "string", enum: ["all", "naver", "kakao"] },
       dateFrom: { type: ["string", "null"] },
@@ -75,6 +79,7 @@ const TOOL_SCHEMA = {
     },
     required: [
       "chartType",
+      "barOrientation",
       "title",
       "platform",
       "dateFrom",
@@ -126,6 +131,7 @@ async function interpretChartRequestAI(query: string): Promise<ChartSpec> {
     ...input,
     limit: Math.min(Math.max(Number(input.limit) || 15, 1), 30),
     exclude: Array.isArray(input.exclude) && input.exclude.length > 0 ? input.exclude : null,
+    barOrientation: input.barOrientation === "vertical" ? "vertical" : "horizontal",
   };
 }
 
@@ -208,6 +214,8 @@ function interpretChartRequestRuleBased(query: string): ChartSpec {
   const chartType: ChartSpec["chartType"] =
     q.includes("비율") || q.includes("비중") || q.includes("구성비") || q.includes("파이") ? "pie" : "bar";
 
+  const barOrientation: ChartSpec["barOrientation"] = q.includes("세로") ? "vertical" : "horizontal";
+
   const limitMatch = q.match(/상위\s?(\d+)|top\s?(\d+)|(\d+)\s?개/i);
   const limit = limitMatch ? Number(limitMatch[1] ?? limitMatch[2] ?? limitMatch[3]) : groupBy ? 10 : 15;
 
@@ -233,6 +241,7 @@ function interpretChartRequestRuleBased(query: string): ChartSpec {
 
   return {
     chartType,
+    barOrientation,
     title: titleParts.join(" "),
     platform,
     dateFrom,
