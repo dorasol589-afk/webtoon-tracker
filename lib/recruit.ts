@@ -70,7 +70,17 @@ export async function fetchSaraminJobs(companyUrl: string): Promise<JobPosting[]
   return dedupeByPostingId(jobs);
 }
 
-function extractJobKoreaJobsFromHtml(html: string, status: JobStatus): JobPosting[] {
+// 회사에 따라 "진행중" URL(ChkDispType 기본값)이 실제로는 마감된 공고까지 섞어서 내려주는
+// 경우가 있다(대원씨아이 등에서 실제 확인함 - 82건이 이 문제였음). 어느 섹션에서 가져왔는지보다
+// day 텍스트 자체("D-N"/"D-day"는 진행중, "마감 (~날짜)"는 마감)가 더 믿을 만해서, 알아볼 수
+// 있으면 그걸 우선하고 애매할 때만 섹션 기준 status로 폴백한다.
+function statusFromDday(dday: string, fallback: JobStatus): JobStatus {
+  if (dday.startsWith("마감")) return "CLOSED";
+  if (dday.startsWith("D-")) return "ACTIVE";
+  return fallback;
+}
+
+function extractJobKoreaJobsFromHtml(html: string, sectionStatus: JobStatus): JobPosting[] {
   const out: JobPosting[] = [];
   const re =
     /data-gno="(\d+)"[\s\S]{0,600}?href="([^"]*)"[\s\S]{0,600}?<dt class="tit">\s*([\s\S]*?)\s*<\/dt>[\s\S]{0,600}?<span class="day tahoma">([^<]*)<\/span>/g;
@@ -82,7 +92,7 @@ function extractJobKoreaJobsFromHtml(html: string, status: JobStatus): JobPostin
       postingId,
       title: titleRaw.trim().replace(/\s+/g, " "),
       url: href.startsWith("http") ? href : `https://www.jobkorea.co.kr${href}`,
-      status,
+      status: statusFromDday(dday, sectionStatus),
       dday,
     });
   }
