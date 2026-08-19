@@ -65,6 +65,22 @@ function dedupeBy<T>(arr: T[], keyFn: (item: T) => string): T[] {
   return [...map.values()];
 }
 
+type TagRow = { title_id: number; tag_name: string; tag_type: string };
+
+// title_tags의 unique key가 (title_id, tag_name)이라 태그명이 같으면 GENRE/KEYWORD를 동시에
+//못 담는다. 네이버가 같은 이름을 GENRE와 KEYWORD 둘 다에 붙이는 경우가 있는데(예: "판타지"),
+// 단순 dedupeBy는 배열 순서상 나중 항목이 이겨서 KEYWORD가 GENRE를 덮어써버리는 사고가 났었다
+// (실제 확인함 - 장르가 통째로 안 뜨던 작품 발견). GENRE가 항상 우선하도록 명시적으로 고른다.
+function dedupeTagRows(rows: TagRow[]): TagRow[] {
+  const map = new Map<string, TagRow>();
+  for (const r of rows) {
+    const key = `${r.title_id}_${r.tag_name}`;
+    const existing = map.get(key);
+    if (!existing || existing.tag_type !== "GENRE") map.set(key, r);
+  }
+  return [...map.values()];
+}
+
 // Supabase(PostgREST)는 명시적 range 없이 select하면 기본 1000행으로 잘라서 반환한다.
 // 대상 테이블이 1000행을 넘어가면 뒤쪽 행이 조용히 누락되므로(에러 없이!), 전체를 읽어야 하는
 // 곳은 반드시 이 헬퍼로 페이지네이션해야 함 - series_products/titles 조회에서 실제로 이 문제로
@@ -184,7 +200,7 @@ async function main() {
         })
       )
     );
-    const dedupedTagRows = dedupeBy(tagRows, (r) => `${r.title_id}_${r.tag_name}`);
+    const dedupedTagRows = dedupeTagRows(tagRows);
     // 매일 최신 상태로 유지: 이번에 태그를 새로 가져온 작품들의 기존 태그를 지우고 다시 채워서
     // 더 이상 안 붙는 태그는 자동으로 빠지게 함
     const successTitleIds = [...new Set(dedupedTagRows.map((r) => r.title_id))];
@@ -699,10 +715,10 @@ async function main() {
           ]);
 
           if (info) {
-            const tagRows = [
+            const tagRows = dedupeTagRows([
               ...info.genres.map((g) => ({ title_id: row.title_id, tag_name: g, tag_type: "GENRE" })),
               ...info.keywords.map((k) => ({ title_id: row.title_id, tag_name: k, tag_type: "KEYWORD" })),
-            ];
+            ]);
             const { error: delError } = await supabase.from("title_tags").delete().eq("title_id", row.title_id);
             if (delError) console.error(`  title_tags 삭제 실패 (${label}):`, delError.message);
             if (tagRows.length > 0) {
