@@ -123,8 +123,16 @@ export function findAmbiguousJobKoreaPostings(
   });
 }
 
+// 사람인/잡코리아 둘 다 마감일을 연장한 공고를 "진행중" 섹션과 "마감된 공고" 아카이브 섹션에
+// 같은 posting_id로 중복 노출하는 경우가 있다(실제 확인함 - 문피아 "웹툰 PD" 공고가 마감일을
+// 08.16→08.30으로 연장했는데도 마감 섹션에 옛날 dday로 된 사본이 남아있었음). 배열 순서만
+// 믿고 마지막 값으로 덮어쓰면 마감 사본이 이겨서 멀쩡히 진행중인 공고가 마감으로 잘못 저장되니,
+// 같은 posting_id가 양쪽에 다 있으면 ACTIVE가 항상 이기게 명시적으로 고른다.
 function dedupeByPostingId(jobs: JobPosting[]): JobPosting[] {
   const map = new Map<string, JobPosting>();
-  for (const j of jobs) map.set(j.postingId, j);
+  for (const j of jobs) {
+    const existing = map.get(j.postingId);
+    if (!existing || existing.status !== "ACTIVE") map.set(j.postingId, j);
+  }
   return [...map.values()];
 }
