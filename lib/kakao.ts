@@ -203,16 +203,35 @@ export interface KakaoStats {
 // 돌든 실제 웹 요청은 항상 느리게 하나씩만 나가게 강제한다.
 // 간격은 KAKAO_CONTENT_PAGE_INTERVAL_MS로 오버라이드 가능 - 매일 도는 수집기는 기본 2초로 충분히
 // 안정적이었지만, 대량 백필처럼 짧은 시간에 훨씬 많은 요청을 몰아 보낼 때는 더 넉넉한 간격이 필요함.
+//
+// 다만 2초 간격만으로는 전체 작품 수(1000개 이상)를 다 처리하기 전에 차단이 걸리는 걸 실제
+// 운영 데이터로 확인함(매일 정확히 절반 정도에서 끊김) - 차단은 한 번 걸리면 몇 분간 유지되는데,
+// 기존 코드는 실패해도 계속 2초 간격으로 재시도하다 보니 차단이 풀리기 전에 남은 요청을 전부
+// 소진해버렸다. 연속 실패가 임계치를 넘으면 차단으로 간주하고 더 길게 쉬어서 풀릴 시간을 준다.
 const CONTENT_PAGE_MIN_INTERVAL_MS = Number(process.env.KAKAO_CONTENT_PAGE_INTERVAL_MS) || 2000;
+const CONTENT_PAGE_BLOCK_COOLDOWN_MS = Number(process.env.KAKAO_CONTENT_PAGE_COOLDOWN_MS) || 3 * 60 * 1000;
+const CONTENT_PAGE_FAILURE_THRESHOLD = 3;
 let contentPageLastFetchAt = 0;
+let contentPageConsecutiveFailures = 0;
 let contentPageQueue: Promise<unknown> = Promise.resolve();
 
 function scheduleContentPageFetch<T>(run: () => Promise<T>): Promise<T> {
   const scheduled = contentPageQueue.then(async () => {
-    const wait = contentPageLastFetchAt + CONTENT_PAGE_MIN_INTERVAL_MS - Date.now();
+    const interval =
+      contentPageConsecutiveFailures >= CONTENT_PAGE_FAILURE_THRESHOLD
+        ? CONTENT_PAGE_BLOCK_COOLDOWN_MS
+        : CONTENT_PAGE_MIN_INTERVAL_MS;
+    const wait = contentPageLastFetchAt + interval - Date.now();
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     contentPageLastFetchAt = Date.now();
-    return run();
+    try {
+      const result = await run();
+      contentPageConsecutiveFailures = 0;
+      return result;
+    } catch (err) {
+      contentPageConsecutiveFailures++;
+      throw err;
+    }
   });
   // 이번 요청이 실패해도 큐 자체는 계속 이어져야 하므로 에러를 삼킨 프라미스를 큐에 남김
   contentPageQueue = scheduled.catch(() => undefined);
