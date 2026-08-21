@@ -3,8 +3,19 @@
 import { config as loadEnv } from "dotenv";
 loadEnv({ path: ".env.local" });
 import pLimit from "p-limit";
-import { fetchSaraminJobs, fetchJobKoreaJobs, type JobPosting } from "../lib/recruit";
+import {
+  fetchSaraminJobs,
+  fetchJobKoreaJobs,
+  fetchSaraminKeywordJobs,
+  fetchJobKoreaKeywordJobs,
+  type JobPosting,
+} from "../lib/recruit";
 import { getSupabaseAdmin } from "../lib/supabase";
+
+const RECRUIT_KEYWORDS = ["웹툰PD"];
+function isRelevantToKeyword(title: string): boolean {
+  return title.includes("웹툰");
+}
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -76,6 +87,70 @@ async function main() {
     if (error) console.error("  studio_job_postings upsert 실패:", error.message);
   }
   console.log(`완료: 채용공고 ${postingRows.length}건 저장 (조회 실패 ${jobFailures}건)`);
+
+  console.log(`키워드 채용공고(${RECRUIT_KEYWORDS.join(", ")}) 조회...`);
+  let keywordFailures = 0;
+  const keywordRows: {
+    keyword: string;
+    source: string;
+    posting_id: string;
+    title: string;
+    company_name: string | null;
+    url: string;
+    status: string;
+    dday: string | null;
+  }[] = [];
+  await Promise.all(
+    RECRUIT_KEYWORDS.map(async (keyword) => {
+      try {
+        const jobs = await fetchSaraminKeywordJobs(keyword);
+        for (const j of jobs.filter((j) => isRelevantToKeyword(j.title))) {
+          keywordRows.push({
+            keyword,
+            source: "SARAMIN",
+            posting_id: j.postingId,
+            title: j.title,
+            company_name: j.companyName || null,
+            url: j.url,
+            status: j.status,
+            dday: j.dday,
+          });
+        }
+      } catch (err) {
+        keywordFailures++;
+        console.error(`  사람인 키워드(${keyword}) 조회 실패:`, err instanceof Error ? err.message : err);
+      }
+      try {
+        const jobs = await fetchJobKoreaKeywordJobs(keyword);
+        for (const j of jobs.filter((j) => isRelevantToKeyword(j.title))) {
+          keywordRows.push({
+            keyword,
+            source: "JOBKOREA",
+            posting_id: j.postingId,
+            title: j.title,
+            company_name: j.companyName || null,
+            url: j.url,
+            status: j.status,
+            dday: j.dday,
+          });
+        }
+      } catch (err) {
+        keywordFailures++;
+        console.error(`  잡코리아 키워드(${keyword}) 조회 실패:`, err instanceof Error ? err.message : err);
+      }
+    })
+  );
+  for (const batch of chunk(RECRUIT_KEYWORDS, 500)) {
+    const { error } = await supabase.from("keyword_job_postings").delete().in("keyword", batch);
+    if (error) console.error("  keyword_job_postings 삭제 실패:", error.message);
+  }
+  for (const batch of chunk(keywordRows, 500)) {
+    const { error } = await supabase
+      .from("keyword_job_postings")
+      .upsert(batch, { onConflict: "keyword,source,posting_id" });
+    if (error) console.error("  keyword_job_postings upsert 실패:", error.message);
+  }
+  console.log(`완료: 키워드 채용공고 ${keywordRows.length}건 저장 (조회 실패 ${keywordFailures}건)`);
 }
 
 main()

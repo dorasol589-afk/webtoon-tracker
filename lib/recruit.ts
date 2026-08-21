@@ -122,6 +122,82 @@ export async function fetchJobKoreaJobs(companyUrl: string): Promise<JobPosting[
   return dedupeByPostingId([...activeJobs, ...closedJobs]);
 }
 
+export interface KeywordJobPosting extends JobPosting {
+  companyName: string;
+}
+
+/**
+ * 사람인 키워드 검색 결과(company-info 페이지가 아니라 zf_user/search/recruit).
+ * 회사 채용페이지와 마크업이 달라 별도 파서가 필요함. 검색 결과 자체가 마감 공고를 섞어
+ * 보여주지 않는 걸 확인해서(모든 date가 "~ 날짜" 또는 "상시채용"/"채용시" 형태) status는 항상 ACTIVE로 둔다.
+ * 사람인 검색은 키워드가 제목에 없어도 관련도로 걸리는 결과를 많이 섞어 보내는 걸 확인해서
+ * (예: "수학 코칭 선생님"도 "웹툰PD" 검색에 나옴), 제목에 "웹툰"이 실제로 포함된 것만 호출측에서 걸러야 한다.
+ */
+export async function fetchSaraminKeywordJobs(keyword: string): Promise<KeywordJobPosting[]> {
+  const url = `https://www.saramin.co.kr/zf_user/search/recruit?searchword=${encodeURIComponent(keyword)}`;
+  const html = await fetchTextWithRetry(url);
+
+  const starts = [...html.matchAll(/<div class="item_recruit" value="(\d+)"/g)];
+  const out: KeywordJobPosting[] = [];
+  for (let i = 0; i < starts.length; i++) {
+    const postingId = starts[i][1];
+    const start = starts[i].index!;
+    const end = i + 1 < starts.length ? starts[i + 1].index! : html.length;
+    const body = html.slice(start, end);
+    const titleMatch = body.match(/<h2 class="job_tit">\s*<a[^>]*title="([^"]*)"/);
+    const hrefMatch = body.match(/<h2 class="job_tit">\s*<a[^>]*href="([^"]*)"/);
+    const dateMatch = body.match(/<span class="date">([^<]*)<\/span>/);
+    const corpMatch = body.match(/<strong class="corp_name">\s*<a[^>]*>([\s\S]*?)<\/a>/);
+    if (!titleMatch || !hrefMatch) continue;
+    const href = hrefMatch[1].replace(/&amp;/g, "&");
+    out.push({
+      postingId,
+      title: titleMatch[1],
+      url: href.startsWith("http") ? href : `https://www.saramin.co.kr${href}`,
+      status: "ACTIVE",
+      dday: dateMatch ? dateMatch[1].trim() : null,
+      companyName: corpMatch ? corpMatch[1].trim() : "",
+    });
+  }
+  return dedupeByPostingId(out) as KeywordJobPosting[];
+}
+
+/**
+ * 잡코리아 키워드 검색 결과(www.jobkorea.co.kr/Search/?stext=). 회사 채용페이지(GI_Read 목록이
+ * 정적 HTML로 오는 구조)와 달리 검색 결과는 React로 렌더링된 카드 목록이라 마크업이 완전히 다르다.
+ * 카드마다 data-sentry-component="CardJob"이 앞에 붙는 걸 확인해서 그 마커로 카드를 나누고,
+ * 카드 안에서 첫 GI_Read 링크(공고 id)/Title 컴포넌트(제목)/회사명 스팬만 뽑는다.
+ * 목록에 마감일이 아예 노출되지 않는 걸 확인해서(회사 페이지와 달리 D-day 배지가 없음) dday는 null로 둔다.
+ * 여기도 사람인과 마찬가지로 검색 자체가 관련도 기반이라 무관한 결과가 섞여 나오므로
+ * 제목에 "웹툰"이 실제로 포함된 것만 호출측에서 걸러야 한다.
+ */
+export async function fetchJobKoreaKeywordJobs(keyword: string): Promise<KeywordJobPosting[]> {
+  const url = `https://www.jobkorea.co.kr/Search/?stext=${encodeURIComponent(keyword)}`;
+  const html = await fetchTextWithRetry(url);
+
+  const cards = html.split('data-sentry-component="CardJob"').slice(1);
+  const out: KeywordJobPosting[] = [];
+  const seen = new Set<string>();
+  for (const card of cards) {
+    const idMatch = card.match(/GI_Read\/(\d+)/);
+    const titleMatch = card.match(/data-sentry-component="Title"[^>]*><span[^>]*>([^<]*)<\/span>/);
+    const companyMatch = card.match(/text-typo-b2-16">([^<]*)<\/span>/);
+    if (!idMatch || !titleMatch) continue;
+    const postingId = idMatch[1];
+    if (seen.has(postingId)) continue;
+    seen.add(postingId);
+    out.push({
+      postingId,
+      title: titleMatch[1].trim(),
+      url: `https://www.jobkorea.co.kr/Recruit/GI_Read/${postingId}`,
+      status: "ACTIVE",
+      dday: null,
+      companyName: companyMatch ? companyMatch[1].trim() : "",
+    });
+  }
+  return out;
+}
+
 /** dday 텍스트가 status와 어긋나는 잡코리아 공고를 골라낸다(수동 점검용) */
 export function findAmbiguousJobKoreaPostings(
   jobs: (JobPosting & { studioName: string })[]

@@ -245,6 +245,25 @@ alter table studio_job_postings add column if not exists dday text;
 create index if not exists idx_studio_job_postings_studio on studio_job_postings (studio_name);
 create index if not exists idx_studio_job_postings_status on studio_job_postings (status);
 
+-- 특정 제작사에 묶이지 않는 키워드 검색 채용공고("웹툰PD" 등 - 지정 제작사 외에도 올라오는
+-- 공고까지 훑기 위함). 사람인/잡코리아 키워드 검색 결과 자체가 관련도 기반이라 무관한 공고도
+-- 섞여 오므로, 저장 전에 제목에 실제로 키워드 핵심어가 포함된 것만 걸러서 넣는다.
+create table if not exists keyword_job_postings (
+  id            bigserial primary key,
+  keyword       text not null,
+  source        text not null, -- 'SARAMIN' | 'JOBKOREA'
+  posting_id    text not null,
+  title         text not null,
+  company_name  text,
+  url           text not null,
+  status        text not null, -- 'ACTIVE' | 'CLOSED'
+  dday          text,
+  last_seen_at  timestamptz not null default now(),
+  unique (keyword, source, posting_id)
+);
+
+create index if not exists idx_keyword_job_postings_keyword on keyword_job_postings (keyword);
+
 -- 네이버 실시간 랭킹(/api/realtime/ranking/list) - 요일 구분 없는 진짜 플랫폼 전체 순위.
 -- rank_tab_type: DEFAULT(실시간 인기랭킹) | NEW(실시간 신작랭킹).
 -- 다만 위젯 특성상 TOTAL/MALE/FEMALE 각각 TOP 5까지만 제공됨.
@@ -275,6 +294,7 @@ alter table title_tags enable row level security;
 alter table studio_aliases enable row level security;
 alter table studio_recruit_links enable row level security;
 alter table studio_job_postings enable row level security;
+alter table keyword_job_postings enable row level security;
 alter table episode_notes enable row level security;
 alter table title_notes enable row level security;
 alter table job_posting_applications enable row level security;
@@ -337,6 +357,11 @@ create policy "studio_recruit_links are publicly readable"
 drop policy if exists "studio_job_postings are publicly readable" on studio_job_postings;
 create policy "studio_job_postings are publicly readable"
   on studio_job_postings for select
+  using (true);
+
+drop policy if exists "keyword_job_postings are publicly readable" on keyword_job_postings;
+create policy "keyword_job_postings are publicly readable"
+  on keyword_job_postings for select
   using (true);
 
 drop policy if exists "title_tags are publicly readable" on title_tags;

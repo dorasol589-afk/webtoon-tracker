@@ -1099,6 +1099,45 @@ export async function getStudioJobPostings(studioName: string): Promise<JobPosti
   }));
 }
 
+export interface KeywordJobPostingRow {
+  source: "SARAMIN" | "JOBKOREA";
+  postingId: string;
+  title: string;
+  companyName: string | null;
+  url: string;
+  status: "ACTIVE" | "CLOSED";
+  dday: string | null;
+  applied: boolean;
+}
+
+/** 특정 제작사에 안 묶인 키워드 검색 채용공고("웹툰PD" 등) - 채용공고 페이지 키워드 섹션용 */
+export async function getKeywordJobPostings(keyword: string): Promise<KeywordJobPostingRow[]> {
+  const supabase = getSupabaseAnon();
+  const [{ data, error }, appliedKeys] = await Promise.all([
+    supabase
+      .from("keyword_job_postings")
+      .select("source,posting_id,title,company_name,url,status,dday")
+      .eq("keyword", keyword)
+      .eq("status", "ACTIVE")
+      .order("company_name", { ascending: true }),
+    getAppliedPostingKeys(),
+  ]);
+  if (error) throw error;
+  return ((data ?? []) as (Omit<KeywordJobPostingRow, "postingId" | "companyName" | "applied"> & {
+    posting_id: string;
+    company_name: string | null;
+  })[]).map((r) => ({
+    source: r.source,
+    postingId: r.posting_id,
+    title: r.title,
+    companyName: r.company_name,
+    url: r.url,
+    status: r.status,
+    dday: r.dday,
+    applied: appliedKeys.has(`${r.source}_${r.posting_id}`),
+  }));
+}
+
 export interface ActiveJobPostingGroup {
   studioName: string;
   postings: JobPostingRow[];

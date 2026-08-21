@@ -1,15 +1,26 @@
-import { getActiveJobPostingsByStudio, getTrackedRecruitStudioNames } from "@/lib/queries";
+import { getActiveJobPostingsByStudio, getTrackedRecruitStudioNames, getKeywordJobPostings } from "@/lib/queries";
 import { hasAdminAccess } from "@/lib/supabase";
 import RecruitSearch from "./RecruitSearch";
+import KeywordJobList from "./KeywordJobList";
 
 export const dynamic = "force-dynamic";
+
+const RECRUIT_KEYWORDS = ["웹툰PD"];
 
 export default async function RecruitPage() {
   let groups: Awaited<ReturnType<typeof getActiveJobPostingsByStudio>> = [];
   let trackedStudios: string[] = [];
+  let keywordResults: { keyword: string; postings: Awaited<ReturnType<typeof getKeywordJobPostings>> }[] = [];
   let loadError = false;
   try {
-    [groups, trackedStudios] = await Promise.all([getActiveJobPostingsByStudio(), getTrackedRecruitStudioNames()]);
+    const [groupsResult, trackedStudiosResult, ...keywordPostingsResults] = await Promise.all([
+      getActiveJobPostingsByStudio(),
+      getTrackedRecruitStudioNames(),
+      ...RECRUIT_KEYWORDS.map((k) => getKeywordJobPostings(k)),
+    ]);
+    groups = groupsResult;
+    trackedStudios = trackedStudiosResult;
+    keywordResults = RECRUIT_KEYWORDS.map((keyword, i) => ({ keyword, postings: keywordPostingsResults[i] }));
   } catch {
     loadError = true;
   }
@@ -29,8 +40,16 @@ export default async function RecruitPage() {
         </div>
       )}
 
+      {!loadError &&
+        keywordResults.map(({ keyword, postings }) => (
+          <KeywordJobList key={keyword} keyword={keyword} postings={postings} readOnly={!hasAdminAccess()} />
+        ))}
+
       {!loadError && (
-        <RecruitSearch groups={groups} trackedStudios={trackedStudios} readOnly={!hasAdminAccess()} />
+        <>
+          <h2 className="mb-3 text-base font-semibold">지정 제작사 공고</h2>
+          <RecruitSearch groups={groups} trackedStudios={trackedStudios} readOnly={!hasAdminAccess()} />
+        </>
       )}
     </div>
   );

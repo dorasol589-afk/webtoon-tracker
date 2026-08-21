@@ -22,7 +22,22 @@ import {
   type RealtimeRankCategory,
 } from "../lib/naver";
 import { SERIES_WATCHLIST } from "../lib/seriesWatchlist";
-import { fetchSaraminJobs, fetchJobKoreaJobs, findAmbiguousJobKoreaPostings, type JobPosting } from "../lib/recruit";
+import {
+  fetchSaraminJobs,
+  fetchJobKoreaJobs,
+  findAmbiguousJobKoreaPostings,
+  fetchSaraminKeywordJobs,
+  fetchJobKoreaKeywordJobs,
+  type JobPosting,
+} from "../lib/recruit";
+
+// 지정 제작사 외에도 올라오는 "웹툰PD" 공고를 훑기 위한 키워드 검색 대상.
+// 사람인/잡코리아 검색 자체가 관련도 기반이라 무관한 결과가 섞여 오므로, 제목에 실제로
+// "웹툰"이 들어간 것만 저장한다("웹툰PD"로 검색해도 "수학 코칭 선생님" 같은 게 실제로 섞여 나옴 - 확인함).
+const RECRUIT_KEYWORDS = ["웹툰PD"];
+function isRelevantToKeyword(title: string): boolean {
+  return title.includes("웹툰");
+}
 
 function getKstDateString(): string {
   const now = new Date();
@@ -635,6 +650,70 @@ async function main() {
         }
       }
     }
+
+    console.log(`  키워드 채용공고(${RECRUIT_KEYWORDS.join(", ")}) 조회...`);
+    let keywordFailures = 0;
+    const keywordRows: {
+      keyword: string;
+      source: string;
+      posting_id: string;
+      title: string;
+      company_name: string | null;
+      url: string;
+      status: string;
+      dday: string | null;
+    }[] = [];
+    await Promise.all(
+      RECRUIT_KEYWORDS.map(async (keyword) => {
+        try {
+          const jobs = await fetchSaraminKeywordJobs(keyword);
+          for (const j of jobs.filter((j) => isRelevantToKeyword(j.title))) {
+            keywordRows.push({
+              keyword,
+              source: "SARAMIN",
+              posting_id: j.postingId,
+              title: j.title,
+              company_name: j.companyName || null,
+              url: j.url,
+              status: j.status,
+              dday: j.dday,
+            });
+          }
+        } catch (err) {
+          keywordFailures++;
+          console.error(`  사람인 키워드(${keyword}) 조회 실패:`, err);
+        }
+        try {
+          const jobs = await fetchJobKoreaKeywordJobs(keyword);
+          for (const j of jobs.filter((j) => isRelevantToKeyword(j.title))) {
+            keywordRows.push({
+              keyword,
+              source: "JOBKOREA",
+              posting_id: j.postingId,
+              title: j.title,
+              company_name: j.companyName || null,
+              url: j.url,
+              status: j.status,
+              dday: j.dday,
+            });
+          }
+        } catch (err) {
+          keywordFailures++;
+          console.error(`  잡코리아 키워드(${keyword}) 조회 실패:`, err);
+        }
+      })
+    );
+    for (const batch of chunk(RECRUIT_KEYWORDS, 500)) {
+      const { error } = await supabase.from("keyword_job_postings").delete().in("keyword", batch);
+      if (error) console.error("  keyword_job_postings 삭제 실패:", error.message);
+    }
+    for (const batch of chunk(keywordRows, 500)) {
+      const { error } = await supabase
+        .from("keyword_job_postings")
+        .upsert(batch, { onConflict: "keyword,source,posting_id" });
+      if (error) console.error("  keyword_job_postings upsert 실패:", error.message);
+    }
+    console.log(`  키워드 채용공고 ${keywordRows.length}건 저장 (조회 실패 ${keywordFailures}건)`);
   } else {
     console.log("  (드라이런 모드 - 채용공고 조회 생략)");
   }
