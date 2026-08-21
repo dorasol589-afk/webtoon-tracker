@@ -302,17 +302,31 @@ export async function fetchRealtimeRanking(
 interface ArticleListResponse {
   totalCount: number;
   articleList: EpisodeListItem[];
+  // "기다리면 무료"(dailyPass) 작품에서 무료 미리보기 몇 화를 제외한 나머지 전체가 여기로 옴.
+  chargeFolderArticleList?: EpisodeListItem[];
 }
 
-/** 특정 작품의 회차 목록 전체 (페이지네이션 처리, 최신순으로 반환됨) */
+/**
+ * 특정 작품의 회차 목록 전체 (페이지네이션 처리, 최신순으로 반환됨).
+ * "기다리면 무료"(dailyPass) 작품은 articleList에 무료 미리보기 몇 화만 들어있고 나머지
+ * 전부가 chargeFolderArticleList에 담겨오는데, 이걸 놓치면 최근 화 이후로 회차/댓글수 추적이
+ * 통째로 멈춰버림(실제로 20화 넘게 나온 작품이 3화에서 멈춰있던 걸 확인함).
+ * chargeFolderArticleList는 page 파라미터와 무관하게 매번 전체가 그대로 내려오는 것도
+ * 확인해서 첫 페이지에서만 합친다. 이 회차들도 실제로는 기다리면 누구나 무료로 읽고 댓글을
+ * 달 수 있어(진짜 유료 전용이 아님) charge를 false로 바꿔서 다른 무료회차와 동일하게
+ * 추적 대상에 포함시킨다(성인 작품을 발견된 회차 전부 추적 대상으로 삼는 것과 같은 방식).
+ */
 export async function fetchAllEpisodes(titleId: number): Promise<EpisodeListItem[]> {
   const first = await fetchJsonWithRetry<ArticleListResponse>(
     `https://comic.naver.com/api/article/list?titleId=${titleId}&page=1`,
     { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } }
   );
-  const episodes = [...first.articleList];
+  const chargeFolder = (first.chargeFolderArticleList ?? []).map((e) => ({ ...e, charge: false }));
+  const episodes = [...first.articleList, ...chargeFolder];
+
   const pageSize = first.articleList.length || 20;
-  const totalPages = Math.ceil(first.totalCount / pageSize);
+  const totalFreeCount = first.totalCount - chargeFolder.length;
+  const totalPages = Math.ceil(totalFreeCount / pageSize);
 
   for (let page = 2; page <= totalPages; page++) {
     const data = await fetchJsonWithRetry<ArticleListResponse>(
