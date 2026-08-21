@@ -5,7 +5,7 @@ export function formatManwon(count: number): string {
 }
 
 /**
- * 채용공고 dday 텍스트("D-18", "~08.31(월)", "상시채용" 등)를 오늘부터 남은 일수로 환산.
+ * 채용공고 dday 텍스트("D-18", "~08.31(월)", "~ 09/19(토)", "상시채용" 등)를 오늘부터 남은 일수로 환산.
  * 마감일순 정렬용 - 형식을 못 알아보면(상시채용/채용시 등) 맨 뒤로 가도록 Infinity 반환.
  */
 export function ddayToDays(dday: string | null): number {
@@ -14,7 +14,10 @@ export function ddayToDays(dday: string | null): number {
   const dMatch = dday.match(/^D-(\d+)/);
   if (dMatch) return parseInt(dMatch[1], 10);
 
-  const dateMatch = dday.match(/(\d{2})\.(\d{2})/);
+  if (dday.includes("오늘마감")) return 0;
+  if (dday.includes("내일마감")) return 1;
+
+  const dateMatch = dday.match(/(\d{2})[./](\d{2})/);
   if (dateMatch) {
     const [, mm, dd] = dateMatch;
     const todayStart = new Date();

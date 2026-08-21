@@ -1,5 +1,7 @@
 // 제작사별 채용공고(사람인/잡코리아) 수집. studio_recruit_links에 등록된 회사 URL을 매일 훑어서
 // studio_job_postings에 저장하고, 대시보드는 DB만 읽는다(매 방문마다 사람인/잡코리아를 직접 긁지 않음).
+import pLimit from "p-limit";
+
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -163,11 +165,33 @@ export async function fetchSaraminKeywordJobs(keyword: string): Promise<KeywordJ
 }
 
 /**
+ * 잡코리아 공고 상세페이지(GI_Read/{id})에 SEO용으로 박혀있는
+ * <script type="application/ld+json" data-sentry-component="JobPostingSchema">의 validThrough를
+ * 읽어서 마감일을 구한다. 목록/카드 뷰에는 마감일이 안 나오지만 상세페이지에는 항상 있는 걸 확인함.
+ * 이미 지난 날짜면(수집 텀 사이 마감된 경우) status를 CLOSED로 내려서 호출측이 걸러낼 수 있게 한다.
+ */
+async function fetchJobKoreaDeadline(postingId: string): Promise<{ dday: string; status: JobStatus } | null> {
+  const html = await fetchTextWithRetry(`https://www.jobkorea.co.kr/Recruit/GI_Read/${postingId}`);
+  const match = html.match(/"validThrough"\s*:\s*"([^"]+)"/);
+  if (!match) return null;
+  const target = new Date(match[1]);
+  if (isNaN(target.getTime())) return null;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const targetStart = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+  const days = Math.round((targetStart.getTime() - todayStart.getTime()) / 86400000);
+  if (days < 0) return { dday: "마감", status: "CLOSED" };
+  return { dday: `D-${days}`, status: "ACTIVE" };
+}
+
+/**
  * 잡코리아 키워드 검색 결과(www.jobkorea.co.kr/Search/?stext=). 회사 채용페이지(GI_Read 목록이
  * 정적 HTML로 오는 구조)와 달리 검색 결과는 React로 렌더링된 카드 목록이라 마크업이 완전히 다르다.
  * 카드마다 data-sentry-component="CardJob"이 앞에 붙는 걸 확인해서 그 마커로 카드를 나누고,
  * 카드 안에서 첫 GI_Read 링크(공고 id)/Title 컴포넌트(제목)/회사명 스팬만 뽑는다.
- * 목록에 마감일이 아예 노출되지 않는 걸 확인해서(회사 페이지와 달리 D-day 배지가 없음) dday는 null로 둔다.
+ * 목록/카드 뷰 자체에는 마감일이 안 나오므로(회사 페이지와 달리 D-day 배지가 없음), 공고별로
+ * 상세페이지를 한 번씩 더 불러서 fetchJobKoreaDeadline으로 마감일을 채운다(개별 요청 실패 시 그
+ * 공고만 dday: null로 남기고 넘어감 - 검색 결과 자체를 버리지 않음).
  * 여기도 사람인과 마찬가지로 검색 자체가 관련도 기반이라 무관한 결과가 섞여 나오므로
  * 제목에 "웹툰"이 실제로 포함된 것만 호출측에서 걸러야 한다.
  */
@@ -195,6 +219,24 @@ export async function fetchJobKoreaKeywordJobs(keyword: string): Promise<Keyword
       companyName: companyMatch ? companyMatch[1].trim() : "",
     });
   }
+
+  const deadlineLimit = pLimit(5);
+  await Promise.all(
+    out.map((job) =>
+      deadlineLimit(async () => {
+        try {
+          const deadline = await fetchJobKoreaDeadline(job.postingId);
+          if (deadline) {
+            job.dday = deadline.dday;
+            job.status = deadline.status;
+          }
+        } catch {
+          // 상세페이지 조회 실패는 그 공고만 dday: null로 남기고 무시(검색 결과 전체는 유지)
+        }
+      })
+    )
+  );
+
   return out;
 }
 

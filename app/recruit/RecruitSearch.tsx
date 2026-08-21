@@ -24,7 +24,7 @@ export default function RecruitSearch({
   readOnly?: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const [sortBy, setSortBy] = useState<SortBy>("studio");
+  const [sortBy, setSortBy] = useState<SortBy>("deadline");
   const [studioFilter, setStudioFilter] = useState("");
 
   const flat = useMemo<FlatPosting[]>(
