@@ -179,6 +179,7 @@ export interface ExportTitleRowUnified {
   id: number;
   platform: "naver" | "kakao";
   title_name: string;
+  thumbnail_url: string | null;
   weekday: string | null;
   is_adult: boolean;
   age_rating: string | null;
@@ -211,6 +212,7 @@ export async function getExportTitlesDataUnified(opts: {
   launchFrom?: string;
   launchTo?: string;
   sortBy?: TitleSortBy | "views" | "likes";
+  genre?: string;
 }): Promise<ExportTitleRowUnified[]> {
   const supabase = getSupabaseAnon();
   const PAGE_SIZE = 1000;
@@ -232,6 +234,7 @@ export async function getExportTitlesDataUnified(opts: {
           filter_launch_from: opts.launchFrom ?? null,
           filter_launch_to: opts.launchTo ?? null,
           sort_by: opts.sortBy ?? "name",
+          filter_genre: opts.genre ?? "all",
         })
         .range(offset, offset + PAGE_SIZE - 1);
       if (!error) {
@@ -631,20 +634,36 @@ export async function listTitlesUnified(opts: {
   adultOnly?: boolean;
   launchFrom?: string;
   launchTo?: string;
+  genre?: string;
 }): Promise<UnifiedTitleListResult> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase.rpc("list_titles_unified", {
-    filter_platform: opts.platform ?? "all",
-    filter_type: opts.type ?? "all",
-    filter_status: opts.status ?? "all",
-    sort_by: opts.sortBy ?? "name",
-    page_num: opts.page ?? 1,
-    page_size: opts.pageSize ?? 50,
-    filter_adult_only: opts.adultOnly ?? false,
-    filter_launch_from: opts.launchFrom ?? null,
-    filter_launch_to: opts.launchTo ?? null,
-  });
-  if (error) throw error;
+  // list_titles_unified가 네이버+카카오를 통째로 훑는 무거운 쿼리라 anon 롤의 짧은
+  // statement_timeout에 가끔(불규칙하게) 걸리는 걸 실제로 겪었다(export 쪽과 동일 원인) -
+  // 몇 번 재시도하면 대체로 통과해서 재시도로 흡수한다.
+  let data: unknown[] | null = null;
+  let lastError: { code?: string; message: string } | null = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 400 * attempt));
+    const result = await supabase.rpc("list_titles_unified", {
+      filter_platform: opts.platform ?? "all",
+      filter_type: opts.type ?? "all",
+      filter_status: opts.status ?? "all",
+      sort_by: opts.sortBy ?? "name",
+      page_num: opts.page ?? 1,
+      page_size: opts.pageSize ?? 50,
+      filter_adult_only: opts.adultOnly ?? false,
+      filter_launch_from: opts.launchFrom ?? null,
+      filter_launch_to: opts.launchTo ?? null,
+      filter_genre: opts.genre ?? "all",
+    });
+    if (!result.error) {
+      data = result.data;
+      break;
+    }
+    lastError = result.error;
+    if (result.error.code !== "57014") break; // statement timeout 외의 에러는 재시도해도 소용없음
+  }
+  if (data === null) throw lastError;
   const rows = (data ?? []) as (UnifiedTitleListRow & { total_count: number })[];
   const totalCount = rows[0]?.total_count ?? 0;
   return { rows: rows.map(({ total_count: _total_count, ...r }) => r), totalCount };
@@ -991,6 +1010,7 @@ async function enrichStudioTitleRows(titles: StudioTitleRow[]): Promise<ExportTi
         id: t.id,
         platform: "naver",
         title_name: t.title_name,
+        thumbnail_url: t.thumbnail_url,
         weekday: t.weekday,
         is_adult: extra?.is_adult ?? false,
         age_rating: extra?.age_rating ?? null,
@@ -1019,6 +1039,7 @@ async function enrichStudioTitleRows(titles: StudioTitleRow[]): Promise<ExportTi
       id: t.id,
       platform: "kakao",
       title_name: t.title_name,
+      thumbnail_url: t.thumbnail_url,
       weekday: null,
       is_adult: extra?.is_adult ?? false,
       age_rating: extra?.age_rating ?? null,

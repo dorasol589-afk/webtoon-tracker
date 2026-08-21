@@ -51,6 +51,8 @@ export default function FilterControls({
   adultOnly,
   launchFrom,
   launchTo,
+  genre,
+  genreOptions,
 }: {
   platform: TitlePlatformFilter;
   type: TitleTypeFilter;
@@ -59,6 +61,8 @@ export default function FilterControls({
   adultOnly: boolean;
   launchFrom: string;
   launchTo: string;
+  genre: string;
+  genreOptions: string[];
 }) {
   const router = useRouter();
 
@@ -71,9 +75,10 @@ export default function FilterControls({
       adultOnly: boolean;
       launchFrom: string;
       launchTo: string;
+      genre: string;
     }>
   ) {
-    const merged = { platform, type, status, sort, adultOnly, launchFrom, launchTo, ...next };
+    const merged = { platform, type, status, sort, adultOnly, launchFrom, launchTo, genre, ...next };
     // 플랫폼을 바꾸면 그쪽에서 의미 없는 필터(요일웹툰/매일+ 타입, 상대 플랫폼 전용 정렬)는 초기화
     if (merged.platform !== "naver") merged.type = "all";
     const sortOption = SORT_OPTIONS.find((o) => o.value === merged.sort);
@@ -87,6 +92,7 @@ export default function FilterControls({
     if (merged.adultOnly) sp.set("adult", "true");
     if (merged.launchFrom) sp.set("launchFrom", merged.launchFrom);
     if (merged.launchTo) sp.set("launchTo", merged.launchTo);
+    if (merged.genre !== "all") sp.set("genre", merged.genre);
     const qs = sp.toString();
     router.push(`/titles${qs ? `?${qs}` : ""}`);
   }
@@ -149,6 +155,18 @@ export default function FilterControls({
         {availableSorts.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
+          </option>
+        ))}
+      </select>
+      <select
+        value={genre}
+        onChange={(e) => update({ genre: e.target.value })}
+        className={selectClass}
+      >
+        <option value="all">전체 장르</option>
+        {genreOptions.map((g) => (
+          <option key={g} value={g}>
+            {g}
           </option>
         ))}
       </select>

@@ -593,6 +593,7 @@ $$;
 -- sort_by 중 popularity/star/comments는 네이버 행에만, views/likes는 카카오 행에만 값이 있고
 -- 나머지 플랫폼 행은 해당 정렬에서 nulls last로 뒤로 밀림(정렬 기준이 없는 게 맞으므로 정상 동작).
 drop function if exists list_titles_unified(text, text, text, text, int, int, boolean, date, date);
+drop function if exists list_titles_unified(text, text, text, text, int, int, boolean, date, date, text);
 create or replace function list_titles_unified(
   filter_platform text default 'all',
   filter_type text default 'all',
@@ -602,7 +603,8 @@ create or replace function list_titles_unified(
   page_size int default 50,
   filter_adult_only boolean default false,
   filter_launch_from date default null,
-  filter_launch_to date default null
+  filter_launch_to date default null,
+  filter_genre text default 'all'
 )
 returns table (
   id bigint,
@@ -685,6 +687,15 @@ as $$
         or (filter_status = 'new' and ti.is_new = true)
         or (filter_status = 'ongoing' and ti.is_finished = false and ti.is_on_hiatus = false)
       )
+      and (
+        filter_genre = 'all'
+        or exists (
+          select 1 from title_tags tg
+          where tg.title_id = ti.title_id
+            and tg.tag_type = 'GENRE'
+            and tg.tag_name = filter_genre
+        )
+      )
   ),
   kakao_latest as (
     select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
@@ -726,6 +737,7 @@ as $$
         or (filter_status = 'ongoing' and kt.is_finished = false and kt.is_on_hiatus = false)
         -- 'new'(신작)는 네이버 전용 개념이라 카카오 쪽은 이 필터에서 항상 제외됨
       )
+      and (filter_genre = 'all' or filter_genre = any(kt.genres))
   ),
   combined as (
     select * from naver_rows
@@ -751,7 +763,7 @@ as $$
   limit page_size offset (page_num - 1) * page_size;
 $$;
 
-grant execute on function list_titles_unified(text, text, text, text, int, int, boolean, date, date) to anon;
+grant execute on function list_titles_unified(text, text, text, text, int, int, boolean, date, date, text) to anon;
 
 -- 제작사 탭용: 활성 작품 전체를 제작사 정보와 함께 반환 (제작사별 그룹핑은 애플리케이션 레벨에서 처리)
 drop function if exists titles_by_studio();
@@ -893,6 +905,7 @@ drop function if exists export_titles_data(text, text, boolean, date, date, text
 -- genre는 kakao_titles.genres 배열을 그대로 join(', ')한 값
 -- (네이버처럼 정식 장르 태그가 아니라 해시태그 키워드임).
 drop function if exists export_titles_data_unified(text, text, text, boolean, date, date, text);
+drop function if exists export_titles_data_unified(text, text, text, boolean, date, date, text, text);
 create or replace function export_titles_data_unified(
   filter_platform text default 'all',
   filter_status text default 'all',
@@ -900,12 +913,14 @@ create or replace function export_titles_data_unified(
   filter_adult_only boolean default false,
   filter_launch_from date default null,
   filter_launch_to date default null,
-  sort_by text default 'name'
+  sort_by text default 'name',
+  filter_genre text default 'all'
 )
 returns table (
   id bigint,
   platform text,
   title_name text,
+  thumbnail_url text,
   weekday text,
   is_adult boolean,
   age_rating text,
@@ -970,7 +985,7 @@ as $$
     select
       ti.title_id as id,
       'naver'::text as platform,
-      ti.title_name, ts.weekday, ti.is_adult, ti.age_rating,
+      ti.title_name, ti.thumbnail_url, ts.weekday, ti.is_adult, ti.age_rating,
       ti.writer, ti.painter, ti.origin_author,
       coalesce(sa.canonical_name, ti.studio_name) as studio_name,
       ti.is_finished, ti.is_on_hiatus, ts.star_score, ts.popularity_rank,
@@ -1005,6 +1020,15 @@ as $$
         or (filter_status = 'new' and ti.is_new = true)
         or (filter_status = 'ongoing' and ti.is_finished = false and ti.is_on_hiatus = false)
       )
+      and (
+        filter_genre = 'all'
+        or exists (
+          select 1 from title_tags tg
+          where tg.title_id = ti.title_id
+            and tg.tag_type = 'GENRE'
+            and tg.tag_name = filter_genre
+        )
+      )
   ),
   kakao_latest as (
     select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
@@ -1017,6 +1041,7 @@ as $$
       kt.content_id as id,
       'kakao'::text as platform,
       kt.title_name,
+      kt.thumbnail_url,
       null::text as weekday,
       kt.is_adult,
       kt.age_rating,
@@ -1046,6 +1071,7 @@ as $$
         or (filter_status = 'hiatus' and kt.is_on_hiatus = true)
         or (filter_status = 'ongoing' and kt.is_finished = false and kt.is_on_hiatus = false)
       )
+      and (filter_genre = 'all' or filter_genre = any(kt.genres))
   ),
   combined as (
     select * from naver_rows
@@ -1077,7 +1103,7 @@ grant execute on function list_titles(text, text, text, int, int, boolean, date,
 grant execute on function titles_by_studio() to anon;
 grant execute on function top_titles_by_download(int) to anon;
 grant execute on function tag_stats(text, int) to anon;
-grant execute on function export_titles_data_unified(text, text, text, boolean, date, date, text) to anon;
+grant execute on function export_titles_data_unified(text, text, text, boolean, date, date, text, text) to anon;
 
 -- ===================== 카카오웹툰 =====================
 -- 네이버와는 완전히 별개 플랫폼이라 title_id 네임스페이스가 겹치지 않도록 독립된 테이블 세트로 관리.

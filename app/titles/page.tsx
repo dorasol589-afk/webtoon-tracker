@@ -1,12 +1,14 @@
 import Link from "next/link";
 import {
   listTitlesUnified,
+  getTagStats,
   type TitleSortBy,
   type TitleStatusFilter,
   type TitleTypeFilter,
   type TitlePlatformFilter,
 } from "@/lib/queries";
 import FilterControls from "./FilterControls";
+import ExportButton from "./ExportButton";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +61,7 @@ function buildHref(params: {
   adultOnly: boolean;
   launchFrom: string;
   launchTo: string;
+  genre: string;
 }) {
   const sp = new URLSearchParams();
   if (params.platform !== "all") sp.set("platform", params.platform);
@@ -68,6 +71,7 @@ function buildHref(params: {
   if (params.adultOnly) sp.set("adult", "true");
   if (params.launchFrom) sp.set("launchFrom", params.launchFrom);
   if (params.launchTo) sp.set("launchTo", params.launchTo);
+  if (params.genre !== "all") sp.set("genre", params.genre);
   if (params.page > 1) sp.set("page", String(params.page));
   const qs = sp.toString();
   return `/titles${qs ? `?${qs}` : ""}`;
@@ -85,9 +89,10 @@ export default async function TitlesPage({
     adult?: string;
     launchFrom?: string;
     launchTo?: string;
+    genre?: string;
   }>;
 }) {
-  const { platform, type, status, sort, page, adult, launchFrom, launchTo } = await searchParams;
+  const { platform, type, status, sort, page, adult, launchFrom, launchTo, genre } = await searchParams;
   const selectedPlatform: TitlePlatformFilter = platform && isPlatform(platform) ? platform : "all";
   const selectedType: TitleTypeFilter = type && isType(type) ? type : "all";
   const selectedStatus: TitleStatusFilter = status && isStatus(status) ? status : "all";
@@ -95,6 +100,7 @@ export default async function TitlesPage({
   const adultOnly = adult === "true";
   const selectedLaunchFrom = launchFrom && isDateString(launchFrom) ? launchFrom : "";
   const selectedLaunchTo = launchTo && isDateString(launchTo) ? launchTo : "";
+  const selectedGenre = genre && genre.trim() ? genre : "all";
   const pageNum = Math.max(1, Number(page) || 1);
 
   let rows: Awaited<ReturnType<typeof listTitlesUnified>>["rows"] = [];
@@ -111,6 +117,7 @@ export default async function TitlesPage({
       adultOnly,
       launchFrom: selectedLaunchFrom || undefined,
       launchTo: selectedLaunchTo || undefined,
+      genre: selectedGenre,
     });
     rows = result.rows;
     totalCount = result.totalCount;
@@ -118,6 +125,14 @@ export default async function TitlesPage({
     loadError = true;
   }
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  let genreOptions: string[] = [];
+  try {
+    const tagStats = await getTagStats("GENRE", 30);
+    genreOptions = tagStats.map((t) => t.tag_name);
+  } catch {
+    genreOptions = [];
+  }
 
   const exportQuery = new URLSearchParams();
   if (selectedPlatform !== "all") exportQuery.set("platform", selectedPlatform);
@@ -127,7 +142,7 @@ export default async function TitlesPage({
   if (adultOnly) exportQuery.set("adult", "true");
   if (selectedLaunchFrom) exportQuery.set("launchFrom", selectedLaunchFrom);
   if (selectedLaunchTo) exportQuery.set("launchTo", selectedLaunchTo);
-  const exportHref = `/api/export/all${exportQuery.toString() ? `?${exportQuery.toString()}` : ""}`;
+  if (selectedGenre !== "all") exportQuery.set("genre", selectedGenre);
 
   return (
     <div>
@@ -149,16 +164,11 @@ export default async function TitlesPage({
         adultOnly={adultOnly}
         launchFrom={selectedLaunchFrom}
         launchTo={selectedLaunchTo}
+        genre={selectedGenre}
+        genreOptions={genreOptions}
       />
 
-      <div className="mb-4">
-        <a
-          href={exportHref}
-          className="inline-block rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50"
-        >
-          엑셀 다운로드
-        </a>
-      </div>
+      <ExportButton baseQuery={exportQuery.toString()} />
 
       <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
         {!loadError && rows.length === 0 && (
@@ -244,6 +254,7 @@ export default async function TitlesPage({
               adultOnly,
               launchFrom: selectedLaunchFrom,
               launchTo: selectedLaunchTo,
+              genre: selectedGenre,
               page: Math.max(1, pageNum - 1),
             })}
             className={
@@ -266,6 +277,7 @@ export default async function TitlesPage({
               adultOnly,
               launchFrom: selectedLaunchFrom,
               launchTo: selectedLaunchTo,
+              genre: selectedGenre,
               page: Math.min(totalPages, pageNum + 1),
             })}
             className={

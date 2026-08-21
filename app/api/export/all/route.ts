@@ -1,5 +1,35 @@
 import ExcelJS from "exceljs";
+import pLimit from "p-limit";
 import { getExportTitlesDataUnified, type TitlePlatformFilter } from "@/lib/queries";
+
+const IMAGE_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+/** 썸네일 다운로드 - 네이버 CDN은 Referer 없으면 403 (실제 확인됨) */
+async function fetchThumbnail(
+  url: string,
+  platform: "naver" | "kakao"
+): Promise<{ buffer: Buffer; extension: "jpeg" | "png" | "gif" } | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": IMAGE_UA,
+        ...(platform === "naver" ? { Referer: "https://comic.naver.com/" } : {}),
+      },
+    });
+    if (!res.ok) return null;
+    const contentType = res.headers.get("content-type") ?? "";
+    const extension: "jpeg" | "png" | "gif" = contentType.includes("png")
+      ? "png"
+      : contentType.includes("gif")
+        ? "gif"
+        : "jpeg";
+    const arrayBuffer = await res.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), extension };
+  } catch {
+    return null;
+  }
+}
 
 const WEEKDAY_KO: Record<string, string> = {
   MONDAY: "월",
@@ -64,6 +94,9 @@ export async function GET(req: Request) {
   const launchToParam = url.searchParams.get("launchTo");
   const launchFrom = isValidDate(launchFromParam) ? launchFromParam : undefined;
   const launchTo = isValidDate(launchToParam) ? launchToParam : undefined;
+  const genreParam = url.searchParams.get("genre");
+  const genre = genreParam && genreParam.trim() ? genreParam : "all";
+  const includeThumbnails = url.searchParams.get("thumbnails") === "true";
 
   const rows = await getExportTitlesDataUnified({
     platform,
@@ -73,15 +106,19 @@ export async function GET(req: Request) {
     launchFrom,
     launchTo,
     sortBy: sort,
+    genre,
   });
 
   const sheetNameParts = [platformLabel(platform), statusLabel(status)];
   if (launchFrom || launchTo) sheetNameParts.push(`${launchFrom ?? ""}~${launchTo ?? ""}`);
+  if (genre !== "all") sheetNameParts.push(genre);
 
   const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet(sheetNameParts.join(" ").slice(0, 31));
+  // 워크시트 이름에 못 쓰는 문자(* ? : \ / [ ])는 장르명("무협/사극" 등)에 실제로 나와서 치환 필요
+  const safeSheetName = sheetNameParts.join(" ").replace(/[*?:\\/[\]]/g, "-").slice(0, 31);
+  const sheet = workbook.addWorksheet(safeSheetName);
 
-  const headers = [
+  const baseHeaders = [
     "연재처",
     "작품명",
     "요일",
@@ -103,6 +140,8 @@ export async function GET(req: Request) {
     "타깃독자층",
     "코멘트",
   ];
+  const headers = includeThumbnails ? ["썸네일", ...baseHeaders] : baseHeaders;
+  const colOffset = includeThumbnails ? 1 : 0;
   headers.forEach((h, i) => {
     const cell = sheet.getCell(1, i + 1);
     cell.value = h;
@@ -111,32 +150,60 @@ export async function GET(req: Request) {
 
   rows.forEach((r, i) => {
     const row = i + 2;
-    sheet.getCell(row, 1).value = r.platform === "kakao" ? "카카오" : "네이버";
-    sheet.getCell(row, 2).value = r.title_name;
-    sheet.getCell(row, 3).value = r.weekday ? (WEEKDAY_KO[r.weekday] ?? r.weekday) : "";
-    sheet.getCell(row, 4).value = r.age_rating || (r.is_adult ? "성인" : "전체이용가");
-    sheet.getCell(row, 5).value = r.writer ?? "";
-    sheet.getCell(row, 6).value = r.painter ?? "";
-    sheet.getCell(row, 7).value = r.origin_author ?? "";
-    sheet.getCell(row, 8).value = r.studio_name ?? "";
-    sheet.getCell(row, 9).value = r.launch_date ?? "";
-    sheet.getCell(row, 10).value = r.star_score ?? "";
-    sheet.getCell(row, 11).value = r.popularity_rank ?? "";
-    sheet.getCell(row, 12).value = r.total_comment_count ?? "";
-    sheet.getCell(row, 13).value = r.download_count ?? "";
-    sheet.getCell(row, 14).value = r.view_count ?? "";
-    sheet.getCell(row, 15).value = r.like_count ?? "";
-    sheet.getCell(row, 16).value = r.genre ?? "";
-    sheet.getCell(row, 17).value = r.subject ?? "";
-    sheet.getCell(row, 18).value = r.logline ?? "";
-    sheet.getCell(row, 19).value = r.target_audience ?? "";
-    sheet.getCell(row, 20).value = r.comment ?? "";
+    sheet.getCell(row, 1 + colOffset).value = r.platform === "kakao" ? "카카오" : "네이버";
+    sheet.getCell(row, 2 + colOffset).value = r.title_name;
+    sheet.getCell(row, 3 + colOffset).value = r.weekday ? (WEEKDAY_KO[r.weekday] ?? r.weekday) : "";
+    sheet.getCell(row, 4 + colOffset).value = r.age_rating || (r.is_adult ? "성인" : "전체이용가");
+    sheet.getCell(row, 5 + colOffset).value = r.writer ?? "";
+    sheet.getCell(row, 6 + colOffset).value = r.painter ?? "";
+    sheet.getCell(row, 7 + colOffset).value = r.origin_author ?? "";
+    sheet.getCell(row, 8 + colOffset).value = r.studio_name ?? "";
+    sheet.getCell(row, 9 + colOffset).value = r.launch_date ?? "";
+    sheet.getCell(row, 10 + colOffset).value = r.star_score ?? "";
+    sheet.getCell(row, 11 + colOffset).value = r.popularity_rank ?? "";
+    sheet.getCell(row, 12 + colOffset).value = r.total_comment_count ?? "";
+    sheet.getCell(row, 13 + colOffset).value = r.download_count ?? "";
+    sheet.getCell(row, 14 + colOffset).value = r.view_count ?? "";
+    sheet.getCell(row, 15 + colOffset).value = r.like_count ?? "";
+    sheet.getCell(row, 16 + colOffset).value = r.genre ?? "";
+    sheet.getCell(row, 17 + colOffset).value = r.subject ?? "";
+    sheet.getCell(row, 18 + colOffset).value = r.logline ?? "";
+    sheet.getCell(row, 19 + colOffset).value = r.target_audience ?? "";
+    sheet.getCell(row, 20 + colOffset).value = r.comment ?? "";
   });
 
-  const widths = [8, 24, 6, 10, 16, 16, 16, 16, 12, 8, 12, 12, 14, 12, 12, 16, 24, 30, 20, 24];
+  const baseWidths = [8, 24, 6, 10, 16, 16, 16, 16, 12, 8, 12, 12, 14, 12, 12, 16, 24, 30, 20, 24];
+  const widths = includeThumbnails ? [10, ...baseWidths] : baseWidths;
   widths.forEach((w, i) => {
     sheet.getColumn(i + 1).width = w;
   });
+
+  if (includeThumbnails) {
+    sheet.getColumn(1).width = 10;
+    const ROW_HEIGHT = 62;
+    sheet.getRow(1).height = 20;
+    const imageLimit = pLimit(10);
+    await Promise.all(
+      rows.map((r, i) =>
+        imageLimit(async () => {
+          if (!r.thumbnail_url) return;
+          const img = await fetchThumbnail(r.thumbnail_url, r.platform);
+          if (!img) return;
+          const row = i + 2;
+          sheet.getRow(row).height = ROW_HEIGHT;
+          const imageId = workbook.addImage({
+            buffer: img.buffer as unknown as ExcelJS.Buffer,
+            extension: img.extension,
+          });
+          sheet.addImage(imageId, {
+            tl: { col: 0, row: row - 1 },
+            ext: { width: 52, height: 76 },
+            editAs: "oneCell",
+          });
+        })
+      )
+    );
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
   const filename = encodeURIComponent(`전체작품_${sheetNameParts.join("_")}.xlsx`);
