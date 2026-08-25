@@ -32,11 +32,17 @@ export default function KeywordJobList({
         (p) => (p.companyName ?? "").toLowerCase().includes(q) || p.title.toLowerCase().includes(q)
       );
     }
+    const bySource = (a: KeywordJobPostingRow, b: KeywordJobPostingRow) =>
+      (SOURCE_LABEL[a.source] ?? a.source).localeCompare(SOURCE_LABEL[b.source] ?? b.source, "ko");
     return [...base].sort((a, b) => {
       if (sortBy === "deadline") {
-        return ddayToDays(a.dday) - ddayToDays(b.dday) || (a.companyName ?? "").localeCompare(b.companyName ?? "", "ko");
+        return (
+          ddayToDays(a.dday) - ddayToDays(b.dday) ||
+          (a.companyName ?? "").localeCompare(b.companyName ?? "", "ko") ||
+          bySource(a, b)
+        );
       }
-      return (a.companyName ?? "").localeCompare(b.companyName ?? "", "ko");
+      return (a.companyName ?? "").localeCompare(b.companyName ?? "", "ko") || bySource(a, b);
     });
   }, [postings, query, sortBy]);
 

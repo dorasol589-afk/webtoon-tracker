@@ -38,11 +38,17 @@ export default function RecruitSearch({
     if (q) {
       base = base.filter((p) => p.studioName.toLowerCase().includes(q) || p.title.toLowerCase().includes(q));
     }
+    const bySource = (a: FlatPosting, b: FlatPosting) =>
+      (SOURCE_LABEL[a.source] ?? a.source).localeCompare(SOURCE_LABEL[b.source] ?? b.source, "ko");
     return [...base].sort((a, b) => {
       if (sortBy === "deadline") {
-        return ddayToDays(a.dday) - ddayToDays(b.dday) || a.studioName.localeCompare(b.studioName, "ko");
+        return (
+          ddayToDays(a.dday) - ddayToDays(b.dday) ||
+          a.studioName.localeCompare(b.studioName, "ko") ||
+          bySource(a, b)
+        );
       }
-      return a.studioName.localeCompare(b.studioName, "ko");
+      return a.studioName.localeCompare(b.studioName, "ko") || bySource(a, b);
     });
   }, [flat, query, sortBy, studioFilter]);
 
