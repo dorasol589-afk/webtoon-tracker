@@ -35,14 +35,15 @@ function extractLaunchDate(html: string): string | null {
 /**
  * 작품명으로 나무위키에서 연재 시작일을 찾는다. 원작 웹소설 등과 제목이 겹쳐 그냥
  * "{title}" 문서가 동음이의 안내 페이지인 경우가 많아, 먼저 원제목으로 시도하고
- * 안 되면 나무위키의 흔한 소명 규칙인 "{title}(웹툰)"으로 재시도한다.
+ * 안 되면 나무위키의 흔한 소명 규칙인 "{title}(웹툰)"으로, 그래도 안 되면 "{title}(만화)"로
+ * 재시도한다("던전 크롤러 칼(만화)"처럼 만화 쪽 표기를 쓰는 문서도 실제로 있었음).
  * 정보를 못 찾으면(문서 없음/양식이 다름) null - 절대 추측해서 채우지 않는다.
  */
 export async function findAdultTitleLaunchDate(titleName: string): Promise<string | null> {
-  const plain = await fetchNamuPage(titleName);
-  const plainDate = plain ? extractLaunchDate(plain) : null;
-  if (plainDate) return plainDate;
-
-  const disambiguated = await fetchNamuPage(`${titleName}(웹툰)`);
-  return disambiguated ? extractLaunchDate(disambiguated) : null;
+  for (const candidate of [titleName, `${titleName}(웹툰)`, `${titleName}(만화)`]) {
+    const html = await fetchNamuPage(candidate);
+    const date = html ? extractLaunchDate(html) : null;
+    if (date) return date;
+  }
+  return null;
 }
