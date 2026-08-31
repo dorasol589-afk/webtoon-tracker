@@ -21,6 +21,7 @@ import {
   fetchTitleInfo,
   type RealtimeRankCategory,
 } from "../lib/naver";
+import { findAdultTitleLaunchDate } from "../lib/namu";
 import { SERIES_WATCHLIST } from "../lib/seriesWatchlist";
 import {
   fetchSaraminJobs,
@@ -336,12 +337,16 @@ async function main() {
   // 성인 작품은 article/list가 로그인 없이는 401(LOGIN)로 막혀있어(확인 완료) 회차 목록을 못 가져옴.
   // 다만 댓글 API는 열려있어서 존재 여부(404)로 이진탐색해 마지막 화 번호를 찾는 방식으로 대체.
   // 이 경우 무료/유료 여부를 알 방법이 없어 발견된 회차 전부를 추적 대상으로 취급함.
+  // 런칭일(1화 service_date)도 같은 이유로 네이버에서 알 수 없어 나무위키의 "연재 기간"으로 보완한다.
+  // 이미 채워져 있으면(예전에 채웠거나 이전 실행에서 이미 찾은 경우) 매일 다시 조회하지 않고 그대로 둔다.
   const episodeLimit = pLimit(5);
   const freeEpisodes: { titleId: number; titleName: string; no: number }[] = [];
   let totalEpisodeCount = 0;
   let episodeFetchFailures = 0;
   let adultTitleCount = 0;
   let adultEpisodeCount = 0;
+  let adultLaunchDateFound = 0;
+  let adultLaunchDateMissed = 0;
 
   await Promise.all(
     titles.map((title) =>
@@ -354,11 +359,26 @@ async function main() {
             adultEpisodeCount += lastNo;
 
             if (supabase && lastNo > 0) {
+              let firstEpisodeDate: string | null = null;
+              const { data: existingFirst } = await supabase
+                .from("episodes")
+                .select("service_date")
+                .eq("title_id", title.titleId)
+                .eq("no", 1)
+                .maybeSingle();
+              if (existingFirst?.service_date) {
+                firstEpisodeDate = existingFirst.service_date;
+              } else {
+                firstEpisodeDate = await findAdultTitleLaunchDate(title.titleName);
+                if (firstEpisodeDate) adultLaunchDateFound++;
+                else adultLaunchDateMissed++;
+              }
+
               const episodeRows = Array.from({ length: lastNo }, (_, i) => ({
                 title_id: title.titleId,
                 no: i + 1,
                 subtitle: null,
-                service_date: null,
+                service_date: i === 0 ? firstEpisodeDate : null,
                 is_free: true,
               }));
               for (const batch of chunk(episodeRows, 500)) {
@@ -415,6 +435,11 @@ async function main() {
       `(중복 ${freeEpisodes.length - dedupedFreeEpisodes.length}건 제거, 회차조회 실패 ${episodeFetchFailures}건)`
   );
   console.log(`  성인 작품 ${adultTitleCount}개는 댓글 API 이진탐색으로 회차 ${adultEpisodeCount}개 발견`);
+  if (adultLaunchDateFound + adultLaunchDateMissed > 0) {
+    console.log(
+      `  성인 작품 런칭일 나무위키 신규 조회: 찾음 ${adultLaunchDateFound}건, 못 찾음 ${adultLaunchDateMissed}건`
+    );
+  }
 
   console.log(`[6/10] 무료회차 댓글수 수집...`);
   const commentLimit = pLimit(15);
