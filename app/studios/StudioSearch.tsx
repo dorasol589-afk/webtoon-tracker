@@ -100,6 +100,7 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
                     alt=""
                     width={112}
                     height={145}
+                    loading="lazy"
                     className="mb-2 h-auto w-full rounded"
                   />
                 )}

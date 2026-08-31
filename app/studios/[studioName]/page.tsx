@@ -118,6 +118,7 @@ export default async function StudioDetailPage({
                   alt=""
                   width={112}
                   height={145}
+                  loading="lazy"
                   className="mb-2 h-auto w-full rounded"
                 />
               )}
