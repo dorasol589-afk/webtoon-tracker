@@ -23,7 +23,7 @@ const STATUS_OPTIONS: { value: TitleStatusFilter; label: string }[] = [
   { value: "hiatus", label: "휴재" },
 ];
 
-type SortValue = TitleSortBy | "views" | "likes";
+type SortValue = TitleSortBy | "views" | "likes" | "downloads";
 
 const SORT_OPTIONS: { value: SortValue; label: string; platforms: TitlePlatformFilter[] }[] = [
   { value: "name", label: "이름순", platforms: ["all", "naver", "kakao"] },
@@ -31,6 +31,7 @@ const SORT_OPTIONS: { value: SortValue; label: string; platforms: TitlePlatformF
   { value: "popularity", label: "인기순(네이버)", platforms: ["all", "naver"] },
   { value: "star", label: "별점순(네이버)", platforms: ["all", "naver"] },
   { value: "comments", label: "댓글수순(네이버)", platforms: ["all", "naver"] },
+  { value: "downloads", label: "다운로드순(네이버)", platforms: ["all", "naver"] },
   { value: "views", label: "조회수순(카카오)", platforms: ["all", "kakao"] },
   { value: "likes", label: "좋아요수순(카카오)", platforms: ["all", "kakao"] },
 ];

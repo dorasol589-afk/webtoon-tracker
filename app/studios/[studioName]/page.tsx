@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStudioTitles, getStudioJobPostings, getStudioRecruitLinkInfo } from "@/lib/queries";
+import { hasAdminAccess } from "@/lib/supabase";
 import ApplyToggle from "@/app/recruit/ApplyToggle";
+import StarToggle from "@/app/recruit/StarToggle";
 import { formatManwon } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +35,7 @@ export default async function StudioDetailPage({
   const { tab } = await searchParams;
   const studioName = decodeURIComponent(rawName);
   const selectedTab = tab === "jobs" ? "jobs" : "titles";
+  const readOnly = !hasAdminAccess();
 
   const [studio, postings, recruitLinkInfo] = await Promise.all([
     getStudioTitles(studioName),
@@ -142,6 +145,10 @@ export default async function StudioDetailPage({
               {t.platform === "kakao" && t.view_count !== null && (
                 <div className="text-xs text-neutral-500">조회 {formatManwon(t.view_count)}</div>
               )}
+              {t.platform === "naver" && t.total_comment_count !== null && (
+                <div className="text-xs text-neutral-500">댓글 {t.total_comment_count.toLocaleString()}</div>
+              )}
+              {t.launch_date && <div className="text-xs text-neutral-400">런칭 {t.launch_date}</div>}
             </Link>
           ))}
         </div>
@@ -167,20 +174,23 @@ export default async function StudioDetailPage({
               <ul className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white">
                 {activePostings.map((p, i) => (
                   <li key={i} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-                    <a
-                      href={p.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="truncate text-blue-600 hover:underline"
-                    >
-                      {p.title}
-                    </a>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <StarToggle source={p.source} postingId={p.postingId} initialStarred={p.starred} readOnly={readOnly} />
+                      <a
+                        href={p.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="truncate text-blue-600 hover:underline"
+                      >
+                        {p.title}
+                      </a>
+                    </span>
                     <span className="flex shrink-0 items-center gap-2">
                       {p.dday && <span className="text-xs text-neutral-400">{p.dday}</span>}
                       <span className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
                         {SOURCE_LABEL[p.source] ?? p.source}
                       </span>
-                      <ApplyToggle source={p.source} postingId={p.postingId} initialApplied={p.applied} />
+                      <ApplyToggle source={p.source} postingId={p.postingId} initialApplied={p.applied} readOnly={readOnly} />
                     </span>
                   </li>
                 ))}
@@ -194,15 +204,18 @@ export default async function StudioDetailPage({
               <ul className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-neutral-50">
                 {closedPostings.map((p, i) => (
                   <li key={i} className="flex items-center justify-between gap-3 px-4 py-3 text-sm text-neutral-400">
-                    <a href={p.url} target="_blank" rel="noopener noreferrer" className="truncate hover:underline">
-                      {p.title}
-                    </a>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <StarToggle source={p.source} postingId={p.postingId} initialStarred={p.starred} readOnly={readOnly} />
+                      <a href={p.url} target="_blank" rel="noopener noreferrer" className="truncate hover:underline">
+                        {p.title}
+                      </a>
+                    </span>
                     <span className="flex shrink-0 items-center gap-2">
                       {p.dday && <span className="text-xs text-neutral-400">{p.dday}</span>}
                       <span className="rounded bg-neutral-200 px-2 py-0.5 text-xs text-neutral-500">
                         {SOURCE_LABEL[p.source] ?? p.source}
                       </span>
-                      <ApplyToggle source={p.source} postingId={p.postingId} initialApplied={p.applied} />
+                      <ApplyToggle source={p.source} postingId={p.postingId} initialApplied={p.applied} readOnly={readOnly} />
                     </span>
                   </li>
                 ))}

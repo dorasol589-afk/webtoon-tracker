@@ -7,11 +7,14 @@ import {
   getSeriesProductForTitle,
   getSeriesHistory,
   getTitleNotes,
+  getTitlePrivateNote,
   getPopularityRankHistory,
+  getNaverTitlesPerf,
 } from "@/lib/queries";
 import SeriesDownloadChart from "./SeriesDownloadChart";
 import PopularityRankChart from "./PopularityRankChart";
 import TitleNotesForm from "./TitleNotesForm";
+import PrivateNoteForm from "./PrivateNoteForm";
 import StudioNameEditor from "@/app/StudioNameEditor";
 import { hasAdminAccess } from "@/lib/supabase";
 
@@ -45,13 +48,16 @@ export default async function TitlePage({
 
   const seriesProduct = await getSeriesProductForTitle(id);
 
-  const [episodes, snapshot, seriesHistory, titleNotes, rankHistory] = await Promise.all([
+  const [episodes, snapshot, seriesHistory, titleNotes, privateNote, rankHistory, perfMap] = await Promise.all([
     getEpisodesWithLatestCount(id),
     getLatestTitleSnapshot(id),
     seriesProduct ? getSeriesHistory(seriesProduct.productNo) : Promise.resolve([]),
     getTitleNotes(id),
+    getTitlePrivateNote(id),
     getPopularityRankHistory(id),
+    getNaverTitlesPerf([id]),
   ]);
+  const perf = perfMap.get(id);
 
   const selectedTab = tab === "stats" ? "stats" : "list";
   const topByComments = [...episodes]
@@ -99,6 +105,11 @@ export default async function TitlePage({
               완결
             </span>
           )}
+          {title.is_novel_origin && (
+            <span className="mt-1 mr-1 inline-block rounded bg-indigo-100 px-2 py-0.5 text-xs text-indigo-700">
+              소설 원작
+            </span>
+          )}
           {title.is_on_hiatus && (
             <span className="mt-1 inline-block rounded bg-orange-200 px-2 py-0.5 text-xs text-orange-800">
               휴재중
@@ -138,6 +149,14 @@ export default async function TitlePage({
                   인기 {snapshot.popularity_rank}위
                 </span>
               )}
+              {perf?.launch_date && (
+                <span className="rounded bg-neutral-100 px-2 py-1 text-neutral-600">런칭 {perf.launch_date}</span>
+              )}
+              {perf?.total_comment_count !== undefined && perf?.total_comment_count !== null && (
+                <span className="rounded bg-neutral-100 px-2 py-1 text-neutral-600">
+                  총 댓글 {perf.total_comment_count.toLocaleString()}
+                </span>
+              )}
             </div>
           )}
           {title.synopsis && (
@@ -159,6 +178,12 @@ export default async function TitlePage({
       <div className="mb-6">
         <TitleNotesForm titleId={id} initial={titleNotes} readOnly={readOnly} />
       </div>
+
+      {!readOnly && (
+        <div className="mb-6">
+          <PrivateNoteForm titleId={id} initial={privateNote} />
+        </div>
+      )}
 
       <div className="mb-4">
         <a

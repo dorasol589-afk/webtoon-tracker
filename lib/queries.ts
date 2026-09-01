@@ -25,6 +25,7 @@ export interface TitleRow {
   writer: string | null;
   painter: string | null;
   origin_author: string | null;
+  is_novel_origin: boolean;
 }
 
 export interface EpisodeRow {
@@ -66,7 +67,7 @@ export async function searchTitles(query: string): Promise<TitleRow[]> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,is_adult,is_new,studio_name,studio_website_url,synopsis,writer,painter,origin_author")
+    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,is_adult,is_new,studio_name,studio_website_url,synopsis,writer,painter,origin_author,is_novel_origin")
     .eq("is_active", true)
     .ilike("title_name", `%${query}%`)
     .order("title_name")
@@ -79,7 +80,7 @@ export async function getTitle(titleId: number): Promise<TitleRow | null> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,is_adult,is_new,studio_name,studio_website_url,synopsis,writer,painter,origin_author")
+    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,is_adult,is_new,studio_name,studio_website_url,synopsis,writer,painter,origin_author,is_novel_origin")
     .eq("title_id", titleId)
     .maybeSingle();
   if (error) throw error;
@@ -172,6 +173,32 @@ export async function saveTitleNotes(titleId: number, notes: TitleNotes): Promis
       { title_id: titleId, ...notes, updated_at: new Date().toISOString() },
       { onConflict: "title_id" }
     );
+  if (error) throw error;
+}
+
+/**
+ * 노션 등에서 정리해온 개인 분석 메모. title_private_notes는 RLS에 select 정책이 아예
+ * 없어서 anon 키로는 애초에 조회가 안 됨(공유 배포에는 절대 안 뜸) - 그래서 여기서도
+ * anon이 아니라 admin 클라이언트로만 읽는다. hasAdminAccess()가 false인 배포(공유 URL)에서는
+ * 조용히 null을 반환해 이 메모 자체가 화면에 나타나지 않게 한다.
+ */
+export async function getTitlePrivateNote(titleId: number): Promise<string | null> {
+  if (!hasAdminAccess()) return null;
+  const supabase = getSupabaseAdmin();
+  const { data } = await supabase
+    .from("title_private_notes")
+    .select("content")
+    .eq("title_id", titleId)
+    .maybeSingle();
+  return data?.content ?? null;
+}
+
+export async function saveTitlePrivateNote(titleId: number, content: string): Promise<void> {
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("title_private_notes")
+    .upsert({ title_id: titleId, content, updated_at: new Date().toISOString() }, { onConflict: "title_id" });
   if (error) throw error;
 }
 
@@ -319,6 +346,11 @@ export interface PopularityRankRow {
   title_name: string;
   thumbnail_url: string | null;
   popularity_rank: number;
+  is_novel_origin: boolean;
+  launch_date: string | null;
+  download_count: number | null;
+  total_comment_count: number | null;
+  star_score: number | null;
 }
 
 /** 요일별 인기순위 (네이버 order=user 기준, 해당 요일 안에서의 순위) */
@@ -343,6 +375,48 @@ export interface RealtimeRankRow {
   title_id: number;
   title_name: string;
   thumbnail_url: string | null;
+  is_novel_origin: boolean;
+  weekday: string | null;
+  popularity_rank: number | null;
+  launch_date: string | null;
+  download_count: number | null;
+  total_comment_count: number | null;
+  star_score: number | null;
+}
+
+export interface NaverTitlePerf {
+  title_id: number;
+  weekday: string | null;
+  popularity_rank: number | null;
+  launch_date: string | null;
+  download_count: number | null;
+  total_comment_count: number | null;
+  star_score: number | null;
+}
+
+export interface KakaoTitlePerf {
+  content_id: number;
+  launch_date: string | null;
+  view_count: number | null;
+}
+
+/** title_id 목록에 대한 요일/인기순위/다운로드수/총댓글수/런칭일 일괄 조회 (검색결과, 실시간 랭킹 등
+ * DB 랭킹 쿼리 없이 title_id 목록만 있는 경우 공용으로 씀) */
+export async function getNaverTitlesPerf(titleIds: number[]): Promise<Map<number, NaverTitlePerf>> {
+  if (titleIds.length === 0) return new Map();
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("naver_titles_perf", { target_ids: titleIds });
+  if (error) throw error;
+  return new Map(((data ?? []) as NaverTitlePerf[]).map((r) => [r.title_id, r]));
+}
+
+/** 카카오 버전(조회수 + 런칭일만 - 인기순위/댓글수는 신뢰성/API 차단 문제로 미제공) */
+export async function getKakaoTitlesPerf(contentIds: number[]): Promise<Map<number, KakaoTitlePerf>> {
+  if (contentIds.length === 0) return new Map();
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("kakao_titles_perf", { target_ids: contentIds });
+  if (error) throw error;
+  return new Map(((data ?? []) as KakaoTitlePerf[]).map((r) => [r.content_id, r]));
 }
 
 /**
@@ -358,7 +432,7 @@ export async function getRealtimeRanking(
   if (!latestDate) return [];
   const { data, error } = await supabase
     .from("realtime_ranking_snapshots")
-    .select("rank,title_id,titles(title_name,thumbnail_url)")
+    .select("rank,title_id,titles(title_name,thumbnail_url,is_novel_origin)")
     .eq("rank_tab_type", rankTabType)
     .eq("category", category)
     .eq("snapshot_date", latestDate)
@@ -371,6 +445,13 @@ export async function getRealtimeRanking(
       title_id: r.title_id,
       title_name: title?.title_name ?? "",
       thumbnail_url: title?.thumbnail_url ?? null,
+      is_novel_origin: title?.is_novel_origin ?? false,
+      weekday: null,
+      popularity_rank: null,
+      launch_date: null,
+      download_count: null,
+      total_comment_count: null,
+      star_score: null,
     };
   });
 }
@@ -389,22 +470,28 @@ export async function getRealtimeRankingLive(
   const items = ranking[category];
   if (items.length === 0) return [];
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase
-    .from("titles")
-    .select("title_id,title_name,thumbnail_url")
-    .in(
-      "title_id",
-      items.map((i) => i.titleId)
-    );
+  const titleIds = items.map((i) => i.titleId);
+  const [{ data, error }, perfMap] = await Promise.all([
+    supabase.from("titles").select("title_id,title_name,thumbnail_url,is_novel_origin").in("title_id", titleIds),
+    getNaverTitlesPerf(titleIds),
+  ]);
   if (error) throw error;
   const titleMap = new Map((data ?? []).map((t) => [t.title_id, t]));
   return items.map((item) => {
     const title = titleMap.get(item.titleId);
+    const perf = perfMap.get(item.titleId);
     return {
       rank: item.rank,
       title_id: item.titleId,
       title_name: title?.title_name ?? "",
       thumbnail_url: title?.thumbnail_url ?? null,
+      is_novel_origin: title?.is_novel_origin ?? false,
+      weekday: perf?.weekday ?? null,
+      popularity_rank: perf?.popularity_rank ?? null,
+      launch_date: perf?.launch_date ?? null,
+      download_count: perf?.download_count ?? null,
+      total_comment_count: perf?.total_comment_count ?? null,
+      star_score: perf?.star_score ?? null,
     };
   });
 }
@@ -437,6 +524,7 @@ export interface SeriesWatchRow {
   title_id: number;
   title_name: string;
   thumbnail_url: string | null;
+  is_novel_origin: boolean;
   download_count: number;
   delta: number;
   snapshot_date: string;
@@ -454,7 +542,7 @@ export async function getSeriesWatchlistLatest(): Promise<SeriesWatchRow[]> {
       .select("product_no,title_id,snapshot_date,download_count")
       .in("product_no", productNos)
       .order("snapshot_date", { ascending: false }),
-    supabase.from("titles").select("title_id,thumbnail_url").in("title_id", titleIds),
+    supabase.from("titles").select("title_id,thumbnail_url,is_novel_origin").in("title_id", titleIds),
   ]);
   if (error) throw error;
   if (titleError) throw titleError;
@@ -465,7 +553,9 @@ export async function getSeriesWatchlistLatest(): Promise<SeriesWatchRow[]> {
     list.push({ snapshot_date: row.snapshot_date, download_count: row.download_count });
     byProduct.set(row.product_no, list);
   }
-  const thumbnailByTitle = new Map((titleRows ?? []).map((t) => [t.title_id, t.thumbnail_url as string | null]));
+  const titleInfoByTitle = new Map(
+    (titleRows ?? []).map((t) => [t.title_id, { thumbnail_url: t.thumbnail_url as string | null, is_novel_origin: t.is_novel_origin as boolean }])
+  );
 
   return SERIES_WATCHLIST.map((w) => {
     const history = byProduct.get(w.productNo) ?? [];
@@ -475,7 +565,8 @@ export async function getSeriesWatchlistLatest(): Promise<SeriesWatchRow[]> {
       product_no: w.productNo,
       title_id: w.titleId,
       title_name: w.name,
-      thumbnail_url: thumbnailByTitle.get(w.titleId) ?? null,
+      thumbnail_url: titleInfoByTitle.get(w.titleId)?.thumbnail_url ?? null,
+      is_novel_origin: titleInfoByTitle.get(w.titleId)?.is_novel_origin ?? false,
       download_count: latest?.download_count ?? 0,
       delta: latest && prev ? latest.download_count - prev.download_count : 0,
       snapshot_date: latest?.snapshot_date ?? "",
@@ -561,6 +652,8 @@ export interface TitleListRow {
   popularity_rank: number | null;
   launch_date: string | null;
   total_comment_count: number | null;
+  is_novel_origin: boolean;
+  download_count: number | null;
 }
 
 export interface TitleListResult {
@@ -616,6 +709,7 @@ export interface UnifiedTitleListRow {
   comment_count: number | null;
   view_count: number | null;
   like_count: number | null;
+  download_count: number | null;
 }
 
 export interface UnifiedTitleListResult {
@@ -628,7 +722,7 @@ export async function listTitlesUnified(opts: {
   platform?: TitlePlatformFilter;
   type?: TitleTypeFilter;
   status?: TitleStatusFilter;
-  sortBy?: TitleSortBy | "views" | "likes";
+  sortBy?: TitleSortBy | "views" | "likes" | "downloads";
   page?: number;
   pageSize?: number;
   adultOnly?: boolean;
@@ -709,6 +803,13 @@ export interface StudioFixRow {
   title_name: string;
   thumbnail_url: string | null;
   studio_name: string | null;
+  is_novel_origin: boolean;
+  weekday: string | null;
+  popularity_rank: number | null;
+  launch_date: string | null;
+  download_count: number | null;
+  total_comment_count: number | null;
+  star_score: number | null;
 }
 
 /** 제작사가 다중/빈값이라 수정이 필요한 작품 전체(연재중+휴재중, 완결 제외) - 홈 화면용 */
@@ -716,13 +817,26 @@ export async function getTitlesNeedingStudioFix(): Promise<StudioFixRow[]> {
   const supabase = getSupabaseAnon();
   const { data, error } = await supabase
     .from("titles")
-    .select("title_id,title_name,thumbnail_url,studio_name")
+    .select("title_id,title_name,thumbnail_url,studio_name,is_novel_origin")
     .eq("is_active", true)
     .eq("is_finished", false)
     .or("studio_name.eq.다중,studio_name.is.null,studio_name.eq.")
     .order("title_name", { ascending: true });
   if (error) throw error;
-  return (data ?? []) as StudioFixRow[];
+  const rows = (data ?? []) as Omit<StudioFixRow, "weekday" | "popularity_rank" | "launch_date" | "download_count" | "total_comment_count" | "star_score">[];
+  const perfMap = await getNaverTitlesPerf(rows.map((r) => r.title_id));
+  return rows.map((r) => {
+    const perf = perfMap.get(r.title_id);
+    return {
+      ...r,
+      weekday: perf?.weekday ?? null,
+      popularity_rank: perf?.popularity_rank ?? null,
+      launch_date: perf?.launch_date ?? null,
+      download_count: perf?.download_count ?? null,
+      total_comment_count: perf?.total_comment_count ?? null,
+      star_score: perf?.star_score ?? null,
+    };
+  });
 }
 
 export interface StudioTitleRow {
@@ -738,6 +852,8 @@ export interface StudioTitleRow {
   download_count: number | null;
   view_count: number | null;
   like_count: number | null;
+  launch_date: string | null;
+  total_comment_count: number | null;
 }
 
 export interface StudioGroup {
@@ -758,6 +874,8 @@ interface NaverStudioRow {
   popularity_rank: number | null;
   star_score: number | null;
   download_count: number | null;
+  launch_date: string | null;
+  total_comment_count: number | null;
 }
 
 interface KakaoStudioRow {
@@ -767,6 +885,7 @@ interface KakaoStudioRow {
   studio_name: string;
   view_count: number | null;
   like_count: number | null;
+  launch_date: string | null;
 }
 
 function sumDownloadCount(titles: StudioTitleRow[]): number {
@@ -810,6 +929,8 @@ async function fetchAllStudioTitles(): Promise<StudioTitleRow[]> {
       download_count: r.download_count,
       view_count: null,
       like_count: null,
+      launch_date: r.launch_date,
+      total_comment_count: r.total_comment_count,
     })
   );
   const kakaoRows = ((kakaoResult.data ?? []) as KakaoStudioRow[]).map(
@@ -826,6 +947,8 @@ async function fetchAllStudioTitles(): Promise<StudioTitleRow[]> {
       download_count: null,
       view_count: r.view_count,
       like_count: r.like_count,
+      launch_date: r.launch_date,
+      total_comment_count: null,
     })
   );
   return [...naverRows, ...kakaoRows];
@@ -1086,6 +1209,7 @@ export interface JobPostingRow {
   status: "ACTIVE" | "CLOSED";
   dday: string | null;
   applied: boolean;
+  starred: boolean;
 }
 
 /** source+posting_id -> applied_at 존재 여부(지원 표시된 공고 키 집합) */
@@ -1096,10 +1220,24 @@ async function getAppliedPostingKeys(): Promise<Set<string>> {
   return new Set((data ?? []).map((r) => `${r.source}_${r.posting_id}`));
 }
 
+/**
+ * source+posting_id -> starred_at 존재 여부(별표 표시된 공고 키 집합). job_posting_stars는
+ * title_private_notes와 동일하게 select 정책이 없어서 anon 키로는 조회가 안 됨 - 그래서
+ * anon이 아니라 admin 클라이언트로만 읽고, hasAdminAccess()가 false인 공유 배포에서는 조회
+ * 자체를 생략하고 빈 집합을 반환해 별표 여부가 화면에 절대 드러나지 않게 한다.
+ */
+async function getStarredPostingKeys(): Promise<Set<string>> {
+  if (!hasAdminAccess()) return new Set();
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.from("job_posting_stars").select("source,posting_id");
+  if (error) throw error;
+  return new Set((data ?? []).map((r) => `${r.source}_${r.posting_id}`));
+}
+
 /** 특정 제작사의 채용공고 전체(진행중+마감) - 제작사 상세페이지 채용공고 탭용 */
 export async function getStudioJobPostings(studioName: string): Promise<JobPostingRow[]> {
   const supabase = getSupabaseAnon();
-  const [{ data, error }, appliedKeys] = await Promise.all([
+  const [{ data, error }, appliedKeys, starredKeys] = await Promise.all([
     supabase
       .from("studio_job_postings")
       .select("source,posting_id,title,url,status,dday")
@@ -1107,17 +1245,21 @@ export async function getStudioJobPostings(studioName: string): Promise<JobPosti
       .order("status", { ascending: true })
       .order("title", { ascending: true }),
     getAppliedPostingKeys(),
+    getStarredPostingKeys(),
   ]);
   if (error) throw error;
-  return ((data ?? []) as (Omit<JobPostingRow, "postingId" | "applied"> & { posting_id: string })[]).map((r) => ({
-    source: r.source,
-    postingId: r.posting_id,
-    title: r.title,
-    url: r.url,
-    status: r.status,
-    dday: r.dday,
-    applied: appliedKeys.has(`${r.source}_${r.posting_id}`),
-  }));
+  return ((data ?? []) as (Omit<JobPostingRow, "postingId" | "applied" | "starred"> & { posting_id: string })[]).map(
+    (r) => ({
+      source: r.source,
+      postingId: r.posting_id,
+      title: r.title,
+      url: r.url,
+      status: r.status,
+      dday: r.dday,
+      applied: appliedKeys.has(`${r.source}_${r.posting_id}`),
+      starred: starredKeys.has(`${r.source}_${r.posting_id}`),
+    })
+  );
 }
 
 export interface KeywordJobPostingRow {
@@ -1129,12 +1271,13 @@ export interface KeywordJobPostingRow {
   status: "ACTIVE" | "CLOSED";
   dday: string | null;
   applied: boolean;
+  starred: boolean;
 }
 
 /** 특정 제작사에 안 묶인 키워드 검색 채용공고("웹툰PD" 등) - 채용공고 페이지 키워드 섹션용 */
 export async function getKeywordJobPostings(keyword: string): Promise<KeywordJobPostingRow[]> {
   const supabase = getSupabaseAnon();
-  const [{ data, error }, appliedKeys] = await Promise.all([
+  const [{ data, error }, appliedKeys, starredKeys] = await Promise.all([
     supabase
       .from("keyword_job_postings")
       .select("source,posting_id,title,company_name,url,status,dday")
@@ -1142,9 +1285,10 @@ export async function getKeywordJobPostings(keyword: string): Promise<KeywordJob
       .eq("status", "ACTIVE")
       .order("company_name", { ascending: true }),
     getAppliedPostingKeys(),
+    getStarredPostingKeys(),
   ]);
   if (error) throw error;
-  return ((data ?? []) as (Omit<KeywordJobPostingRow, "postingId" | "companyName" | "applied"> & {
+  return ((data ?? []) as (Omit<KeywordJobPostingRow, "postingId" | "companyName" | "applied" | "starred"> & {
     posting_id: string;
     company_name: string | null;
   })[]).map((r) => ({
@@ -1156,6 +1300,7 @@ export async function getKeywordJobPostings(keyword: string): Promise<KeywordJob
     status: r.status,
     dday: r.dday,
     applied: appliedKeys.has(`${r.source}_${r.posting_id}`),
+    starred: starredKeys.has(`${r.source}_${r.posting_id}`),
   }));
 }
 
@@ -1167,16 +1312,17 @@ export interface ActiveJobPostingGroup {
 /** 전체 제작사의 현재 진행중인 채용공고 - 채용공고 탭용 */
 export async function getActiveJobPostingsByStudio(): Promise<ActiveJobPostingGroup[]> {
   const supabase = getSupabaseAnon();
-  const [{ data, error }, appliedKeys] = await Promise.all([
+  const [{ data, error }, appliedKeys, starredKeys] = await Promise.all([
     supabase
       .from("studio_job_postings")
       .select("studio_name,source,posting_id,title,url,status,dday")
       .eq("status", "ACTIVE")
       .order("studio_name", { ascending: true }),
     getAppliedPostingKeys(),
+    getStarredPostingKeys(),
   ]);
   if (error) throw error;
-  const rows = (data ?? []) as (Omit<JobPostingRow, "postingId" | "applied"> & {
+  const rows = (data ?? []) as (Omit<JobPostingRow, "postingId" | "applied" | "starred"> & {
     studio_name: string;
     posting_id: string;
   })[];
@@ -1192,6 +1338,7 @@ export async function getActiveJobPostingsByStudio(): Promise<ActiveJobPostingGr
       status: row.status,
       dday: row.dday,
       applied: appliedKeys.has(`${row.source}_${row.posting_id}`),
+      starred: starredKeys.has(`${row.source}_${row.posting_id}`),
     });
     groups.set(row.studio_name, list);
   }
@@ -1229,6 +1376,25 @@ export async function setJobApplied(source: string, postingId: string, applied: 
   }
 }
 
+/** 채용공고 별표 토글(존재 = 별표됨). 공유 배포에서는 assertAdminAccess에서 막힘 */
+export async function setJobStarred(source: string, postingId: string, starred: boolean): Promise<void> {
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
+  if (starred) {
+    const { error } = await supabase
+      .from("job_posting_stars")
+      .upsert({ source, posting_id: postingId }, { onConflict: "source,posting_id" });
+    if (error) throw error;
+  } else {
+    const { error } = await supabase
+      .from("job_posting_stars")
+      .delete()
+      .eq("source", source)
+      .eq("posting_id", postingId);
+    if (error) throw error;
+  }
+}
+
 /**
  * 채용정보 링크 등록 여부 - 제작사 상세페이지에서 메시지 분기용.
  * null: studio_recruit_links에 아예 등록 안 됨 -> "사이트 내 기업 정보가 없습니다."
@@ -1254,6 +1420,11 @@ export interface DownloadRankRow {
   thumbnail_url: string | null;
   studio_name: string | null;
   download_count: number;
+  is_novel_origin: boolean;
+  weekday: string | null;
+  launch_date: string | null;
+  total_comment_count: number | null;
+  star_score: number | null;
 }
 
 /** 다운로드수 상위 작품 랭킹(제작사 포함) - 홈 화면용 */
@@ -1387,6 +1558,7 @@ export interface KakaoTopRow {
   studio_name: string | null;
   view_count: number | null;
   like_count: number | null;
+  launch_date: string | null;
 }
 
 /** 조회수/좋아요수 상위 작품 랭킹 - 카카오 홈 화면용 */
@@ -1401,6 +1573,8 @@ export interface KakaoNewLaunchRow {
   content_id: number;
   title_name: string;
   thumbnail_url: string | null;
+  launch_date: string | null;
+  view_count: number | null;
 }
 
 /** 카카오 사이트의 "신작" 카테고리(kakao_titles.is_new)에 속하면서 최근 daysBack일 안에
@@ -1416,6 +1590,8 @@ export interface KakaoStudioFixRow {
   content_id: number;
   title_name: string;
   thumbnail_url: string | null;
+  launch_date: string | null;
+  view_count: number | null;
 }
 
 /** 제작사 정보가 비어있는 연재중 작품 전체 - 카카오 홈 화면 "제작사 정보 필요"용 */
@@ -1446,28 +1622,63 @@ export interface UnifiedSearchResult {
   thumbnailUrl: string | null;
   author: string | null;
   isAdult: boolean;
+  isNovelOrigin: boolean;
+  launchDate: string | null;
+  weekday: string | null;
+  popularityRank: number | null;
+  downloadCount: number | null;
+  totalCommentCount: number | null;
+  viewCount: number | null;
+  starScore: number | null;
 }
 
 /** 네이버/카카오 작품을 동시에 검색해 플랫폼 구분된 결과로 합쳐 반환 (홈 화면 통합검색용) */
 export async function unifiedSearch(query: string): Promise<UnifiedSearchResult[]> {
   const [naverResults, kakaoResults] = await Promise.all([searchTitles(query), searchKakaoTitles(query)]);
+  const [naverPerfMap, kakaoPerfMap] = await Promise.all([
+    getNaverTitlesPerf(naverResults.map((t) => t.title_id)),
+    getKakaoTitlesPerf(kakaoResults.map((t) => t.content_id)),
+  ]);
   const combined: UnifiedSearchResult[] = [
-    ...naverResults.map((t) => ({
-      platform: "naver" as const,
-      id: t.title_id,
-      titleName: t.title_name,
-      thumbnailUrl: t.thumbnail_url,
-      author: t.author,
-      isAdult: t.is_adult,
-    })),
-    ...kakaoResults.map((t) => ({
-      platform: "kakao" as const,
-      id: t.content_id,
-      titleName: t.title_name,
-      thumbnailUrl: t.thumbnail_url,
-      author: [t.writer, t.painter].filter((v, i, arr) => v && arr.indexOf(v) === i).join(" / ") || null,
-      isAdult: t.is_adult,
-    })),
+    ...naverResults.map((t) => {
+      const perf = naverPerfMap.get(t.title_id);
+      return {
+        platform: "naver" as const,
+        id: t.title_id,
+        titleName: t.title_name,
+        thumbnailUrl: t.thumbnail_url,
+        author: t.author,
+        isAdult: t.is_adult,
+        isNovelOrigin: t.is_novel_origin,
+        launchDate: perf?.launch_date ?? null,
+        weekday: perf?.weekday ?? null,
+        popularityRank: perf?.popularity_rank ?? null,
+        downloadCount: perf?.download_count ?? null,
+        totalCommentCount: perf?.total_comment_count ?? null,
+        viewCount: null,
+        starScore: perf?.star_score ?? null,
+      };
+    }),
+    ...kakaoResults.map((t) => {
+      const perf = kakaoPerfMap.get(t.content_id);
+      return {
+        platform: "kakao" as const,
+        id: t.content_id,
+        titleName: t.title_name,
+        thumbnailUrl: t.thumbnail_url,
+        author: [t.writer, t.painter].filter((v, i, arr) => v && arr.indexOf(v) === i).join(" / ") || null,
+        isAdult: t.is_adult,
+        // 카카오는 원작 크레딧 데이터 구조가 달라 소설원작 여부를 아직 판별하지 않음
+        isNovelOrigin: false,
+        launchDate: perf?.launch_date ?? null,
+        weekday: null,
+        popularityRank: null,
+        downloadCount: null,
+        totalCommentCount: null,
+        viewCount: perf?.view_count ?? null,
+        starScore: null,
+      };
+    }),
   ];
   return combined.sort((a, b) => a.titleName.localeCompare(b.titleName, "ko"));
 }

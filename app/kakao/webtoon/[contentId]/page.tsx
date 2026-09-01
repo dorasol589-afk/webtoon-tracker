@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getKakaoTitle, getKakaoEpisodes, getKakaoStatHistory } from "@/lib/queries";
+import { getKakaoTitle, getKakaoEpisodes, getKakaoStatHistory, getKakaoTitlesPerf } from "@/lib/queries";
 import { hasAdminAccess } from "@/lib/supabase";
 import KakaoStatChart from "./KakaoStatChart";
 import KakaoStudioNameEditor from "@/app/kakao/KakaoStudioNameEditor";
@@ -25,8 +25,13 @@ export default async function KakaoTitlePage({
   if (!title) notFound();
   const readOnly = !hasAdminAccess();
 
-  const [episodes, statHistory] = await Promise.all([getKakaoEpisodes(id), getKakaoStatHistory(id)]);
+  const [episodes, statHistory, perfMap] = await Promise.all([
+    getKakaoEpisodes(id),
+    getKakaoStatHistory(id),
+    getKakaoTitlesPerf([id]),
+  ]);
   const latestStat = statHistory.at(-1);
+  const perf = perfMap.get(id);
 
   return (
     <div>
@@ -90,14 +95,17 @@ export default async function KakaoTitlePage({
               ))}
             </div>
           )}
-          {latestStat && (
+          {(latestStat || perf?.launch_date) && (
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
-              {latestStat.view_count !== null && (
+              {perf?.launch_date && (
+                <span className="rounded bg-neutral-100 px-2 py-1 text-neutral-700">런칭 {perf.launch_date}</span>
+              )}
+              {latestStat?.view_count !== null && latestStat?.view_count !== undefined && (
                 <span className="rounded bg-neutral-100 px-2 py-1 text-neutral-700">
                   조회수 {latestStat.view_count.toLocaleString()}
                 </span>
               )}
-              {latestStat.like_count !== null && (
+              {latestStat?.like_count !== null && latestStat?.like_count !== undefined && (
                 <span className="rounded bg-neutral-100 px-2 py-1 text-neutral-700">
                   좋아요 {latestStat.like_count.toLocaleString()}
                 </span>

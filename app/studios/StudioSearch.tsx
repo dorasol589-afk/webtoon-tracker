@@ -124,6 +124,10 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
                 {t.platform === "kakao" && t.view_count !== null && (
                   <div className="text-xs text-neutral-500">조회 {formatManwon(t.view_count)}</div>
                 )}
+                {t.platform === "naver" && t.total_comment_count !== null && (
+                  <div className="text-xs text-neutral-500">댓글 {t.total_comment_count.toLocaleString()}</div>
+                )}
+                {t.launch_date && <div className="text-xs text-neutral-400">런칭 {t.launch_date}</div>}
               </Link>
             ))}
           </div>

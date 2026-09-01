@@ -23,12 +23,12 @@ const WEEKDAY_KO: Record<string, string> = {
   DAILY_PLUS: "매일+",
 };
 
-type SortValue = TitleSortBy | "views" | "likes";
+type SortValue = TitleSortBy | "views" | "likes" | "downloads";
 
 const PLATFORM_VALUES: TitlePlatformFilter[] = ["all", "naver", "kakao"];
 const TYPE_VALUES: TitleTypeFilter[] = ["all", "weekday", "daily_plus"];
 const STATUS_VALUES: TitleStatusFilter[] = ["all", "ongoing", "new", "finished", "hiatus"];
-const SORT_VALUES: SortValue[] = ["name", "popularity", "star", "launch", "comments", "views", "likes"];
+const SORT_VALUES: SortValue[] = ["name", "popularity", "star", "launch", "comments", "views", "likes", "downloads"];
 
 const PAGE_SIZE = 50;
 
@@ -234,9 +234,11 @@ export default async function TitlesPage({
                     {t.weekday === "DAILY_PLUS" ? "" : "요일"} {t.popularity_rank}위
                   </div>
                 )}
+                {t.download_count !== null && <div>다운 {Math.round(t.download_count / 10000).toLocaleString()}만</div>}
                 {t.comment_count !== null && <div>댓글 {t.comment_count.toLocaleString()}개</div>}
                 {t.view_count !== null && <div>조회 {Math.round(t.view_count / 10000).toLocaleString()}만</div>}
                 {t.like_count !== null && <div>좋아요 {Math.round(t.like_count / 10000).toLocaleString()}만</div>}
+                {t.launch_date && <div className="text-neutral-400">런칭 {t.launch_date}</div>}
               </div>
             </Link>
           </li>

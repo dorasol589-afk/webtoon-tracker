@@ -46,6 +46,10 @@ alter table titles add column if not exists origin_author text;
 -- 실제 연령등급 (article/list/info의 age.description, 예: "15세 이용가" / "전체이용가")
 alter table titles add column if not exists age_rating text;
 
+-- 소설 원작 여부 (communityArtists의 ARTIST_NOVEL_ORIGIN 크레딧 또는 curationTagList의
+-- NOVEL_ORIGIN 태그로 판별 - 다른 원작 타입(게임/웹툰 등)과 섞이지 않도록 이 값만 콕 집어서 확인)
+alter table titles add column if not exists is_novel_origin boolean not null default false;
+
 create table if not exists episodes (
   title_id         bigint not null references titles(title_id),
   no               integer not null,
@@ -77,6 +81,18 @@ create table if not exists title_notes (
 
 alter table title_notes add column if not exists comment text;
 
+-- 노션 등에서 정리한 개인 분석 메모 - 절대 공유 배포(Vercel)에 노출되면 안 되는 내용이라
+-- title_notes(공개 읽기 허용)와 분리된 테이블로 둔다. RLS는 켜두되 select/insert/update
+-- 정책을 아예 만들지 않아서 anon/authenticated 롤은 기본적으로 아무것도 못 보고 못 쓴다 -
+-- service_role만 RLS를 우회해 접근 가능하므로, SUPABASE_SERVICE_ROLE_KEY가 있는 로컬
+-- 환경에서만 읽고 쓸 수 있고 공유 URL에서는 이 테이블 존재 자체가 보이지 않는다.
+create table if not exists title_private_notes (
+  title_id   bigint not null primary key references titles(title_id),
+  content    text,
+  updated_at timestamptz not null default now()
+);
+alter table title_private_notes enable row level security;
+
 -- 채용공고 지원 여부 표시(개인용 체크). studio_job_postings는 매일 삭제 후 재삽입되므로
 -- 거기에 컬럼을 두면 지원 표시가 매일 사라짐 - source+posting_id로 별도 테이블에 독립 보관.
 create table if not exists job_posting_applications (
@@ -85,6 +101,17 @@ create table if not exists job_posting_applications (
   applied_at  timestamptz not null default now(),
   primary key (source, posting_id)
 );
+
+-- 채용공고 별표 표시(개인용, 관심 공고 마킹). title_private_notes와 동일하게 RLS만 켜고
+-- select/insert/update 정책을 아예 안 만들어서 service_role(로컬)만 접근 가능하게 하고,
+-- 공유 URL에서는 존재 자체가 안 보이게 한다(지원 여부처럼 공개 읽기로 두지 않음).
+create table if not exists job_posting_stars (
+  source      text not null,
+  posting_id  text not null,
+  starred_at  timestamptz not null default now(),
+  primary key (source, posting_id)
+);
+alter table job_posting_stars enable row level security;
 
 create table if not exists comment_snapshots (
   title_id      bigint not null,
@@ -159,6 +186,9 @@ create table if not exists series_snapshots (
 
 create index if not exists idx_series_snapshots_date
   on series_snapshots (snapshot_date);
+
+create index if not exists idx_series_snapshots_title_date
+  on series_snapshots (title_id, snapshot_date desc);
 
 -- 작품의 장르/키워드 태그 (comic.naver.com article/list/info의 curationTagList).
 -- tag_type: GENRE(장르, curationType이 GENRE_로 시작) | KEYWORD(태그, curationType=CUSTOM_TAG).
@@ -468,18 +498,55 @@ returns table (
   title_id bigint,
   title_name text,
   thumbnail_url text,
-  popularity_rank integer
+  popularity_rank integer,
+  is_novel_origin boolean,
+  launch_date date,
+  download_count bigint,
+  total_comment_count bigint,
+  star_score numeric
 )
 language sql
 stable
 as $$
   with latest as (
     select snapshot_date from title_weekday_ranks order by snapshot_date desc limit 1
+  ),
+  naver_launch as (
+    select title_id, min(service_date) as launch_date from episodes group by title_id
+  ),
+  latest_series_date as (
+    select title_id, max(snapshot_date) as snapshot_date from series_snapshots group by title_id
+  ),
+  series_latest as (
+    select ss.title_id, ss.download_count
+    from series_snapshots ss
+    join latest_series_date lsd on lsd.title_id = ss.title_id and lsd.snapshot_date = ss.snapshot_date
+  ),
+  latest_comment_date as (
+    select max(snapshot_date) as snapshot_date from comment_snapshots
+  ),
+  comment_totals as (
+    select cs.title_id, sum(cs.comment_count) as total_comment_count
+    from comment_snapshots cs, latest_comment_date lcd
+    where cs.snapshot_date = lcd.snapshot_date
+    group by cs.title_id
+  ),
+  star_latest as (
+    select snapshot_date from title_snapshots order by snapshot_date desc limit 1
   )
-  select twr.title_id, ti.title_name, ti.thumbnail_url, twr.popularity_rank
+  select
+    twr.title_id, ti.title_name, ti.thumbnail_url, twr.popularity_rank, ti.is_novel_origin,
+    coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
+    sl.download_count,
+    ct.total_comment_count,
+    ts.star_score
   from title_weekday_ranks twr
   join latest on twr.snapshot_date = latest.snapshot_date
   join titles ti on ti.title_id = twr.title_id
+  left join naver_launch nl on nl.title_id = twr.title_id
+  left join series_latest sl on sl.title_id = twr.title_id
+  left join comment_totals ct on ct.title_id = twr.title_id
+  left join title_snapshots ts on ts.title_id = twr.title_id and ts.snapshot_date = (select snapshot_date from star_latest)
   where twr.weekday = target_weekday and twr.popularity_rank is not null and ti.is_active = true
   order by twr.popularity_rank asc
   limit result_limit;
@@ -521,6 +588,8 @@ returns table (
   popularity_rank integer,
   launch_date date,
   total_comment_count bigint,
+  is_novel_origin boolean,
+  download_count bigint,
   total_count bigint
 )
 language sql
@@ -538,6 +607,14 @@ as $$
     where cs.snapshot_date = lcd.snapshot_date
     group by cs.title_id
   ),
+  latest_series_date as (
+    select title_id, max(snapshot_date) as snapshot_date from series_snapshots group by title_id
+  ),
+  series_latest as (
+    select ss.title_id, ss.download_count
+    from series_snapshots ss
+    join latest_series_date lsd on lsd.title_id = ss.title_id and lsd.snapshot_date = ss.snapshot_date
+  ),
   base as (
     select
       ti.title_id, ti.title_name, ti.thumbnail_url, ti.author, ti.studio_name,
@@ -549,11 +626,14 @@ as $$
         (select min(e.service_date) from episodes e where e.title_id = ti.title_id),
         ti.first_seen_at::date
       ) as launch_date,
-      ct.total_comment_count
+      ct.total_comment_count,
+      ti.is_novel_origin,
+      sl.download_count
     from titles ti
     left join title_snapshots ts
       on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from latest)
     left join comment_totals ct on ct.title_id = ti.title_id
+    left join series_latest sl on sl.title_id = ti.title_id
     where ti.is_active = true
       and (filter_adult_only = false or ti.is_adult = true)
       and (
@@ -624,6 +704,7 @@ returns table (
   comment_count bigint,
   view_count bigint,
   like_count bigint,
+  download_count bigint,
   total_count bigint
 )
 language sql
@@ -647,6 +728,8 @@ as $$
   naver_launch as (
     select title_id, min(service_date) as launch_date from episodes group by title_id
   ),
+  -- download_count: idx_series_snapshots_title_date(title_id, snapshot_date desc) 인덱스로
+  -- LATERAL에서 title당 최신 1건만 인덱스로 바로 찾게 해서(전체 집계 대신) 비용을 최소화함
   naver_rows as (
     select
       ti.title_id as id,
@@ -665,13 +748,21 @@ as $$
       ts.star_score,
       ct.total_comment_count as comment_count,
       null::bigint as view_count,
-      null::bigint as like_count
+      null::bigint as like_count,
+      sl.download_count
     from titles ti
     left join title_snapshots ts
       on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from naver_latest)
     left join naver_comment_totals ct on ct.title_id = ti.title_id
     left join studio_aliases sa on sa.raw_name = ti.studio_name
     left join naver_launch nl on nl.title_id = ti.title_id
+    left join lateral (
+      select ss.download_count
+      from series_snapshots ss
+      where ss.title_id = ti.title_id
+      order by ss.snapshot_date desc
+      limit 1
+    ) sl on true
     where ti.is_active = true
       and (filter_platform = 'all' or filter_platform = 'naver')
       and (filter_adult_only = false or ti.is_adult = true)
@@ -721,7 +812,8 @@ as $$
       null::numeric as star_score,
       null::bigint as comment_count,
       kss.view_count,
-      kss.like_count
+      kss.like_count,
+      null::bigint as download_count
     from kakao_titles kt
     left join kakao_stat_snapshots kss
       on kss.content_id = kt.content_id and kss.snapshot_date = (select snapshot_date from kakao_latest)
@@ -759,6 +851,7 @@ as $$
     case when sort_by = 'comments' then f.comment_count end desc nulls last,
     case when sort_by = 'views' then f.view_count end desc nulls last,
     case when sort_by = 'likes' then f.like_count end desc nulls last,
+    case when sort_by = 'downloads' then f.download_count end desc nulls last,
     f.title_name asc
   limit page_size offset (page_num - 1) * page_size;
 $$;
@@ -777,7 +870,9 @@ returns table (
   weekday text,
   popularity_rank integer,
   star_score numeric,
-  download_count bigint
+  download_count bigint,
+  launch_date date,
+  total_comment_count bigint
 )
 language sql
 stable
@@ -795,18 +890,34 @@ as $$
     from series_snapshots ss
     join latest_series_date lsd
       on lsd.title_id = ss.title_id and lsd.snapshot_date = ss.snapshot_date
+  ),
+  naver_launch as (
+    select title_id, min(service_date) as launch_date from episodes group by title_id
+  ),
+  latest_comment_date as (
+    select max(snapshot_date) as snapshot_date from comment_snapshots
+  ),
+  comment_totals as (
+    select cs.title_id, sum(cs.comment_count) as total_comment_count
+    from comment_snapshots cs, latest_comment_date lcd
+    where cs.snapshot_date = lcd.snapshot_date
+    group by cs.title_id
   )
   select
     ti.title_id, ti.title_name, ti.thumbnail_url,
     coalesce(sa.canonical_name, ti.studio_name) as studio_name,
     ti.studio_website_url,
     ts.weekday, ts.popularity_rank, ts.star_score,
-    sl.download_count
+    sl.download_count,
+    coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
+    ct.total_comment_count
   from titles ti
   left join title_snapshots ts
     on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from latest)
   left join studio_aliases sa on sa.raw_name = ti.studio_name
   left join series_latest sl on sl.title_id = ti.title_id
+  left join naver_launch nl on nl.title_id = ti.title_id
+  left join comment_totals ct on ct.title_id = ti.title_id
   where ti.is_active = true and ti.studio_name is not null;
 $$;
 
@@ -821,20 +932,26 @@ returns table (
   thumbnail_url text,
   studio_name text,
   view_count bigint,
-  like_count bigint
+  like_count bigint,
+  launch_date date
 )
 language sql
 stable
 as $$
   with latest as (
     select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  ),
+  kakao_launch as (
+    select content_id, min(service_date) as launch_date from kakao_episodes group by content_id
   )
   select
     kt.content_id, kt.title_name, kt.thumbnail_url, kt.studio_name,
-    kss.view_count, kss.like_count
+    kss.view_count, kss.like_count,
+    coalesce(kl.launch_date, kt.first_seen_at::date) as launch_date
   from kakao_titles kt
   left join kakao_stat_snapshots kss
     on kss.content_id = kt.content_id and kss.snapshot_date = (select snapshot_date from latest)
+  left join kakao_launch kl on kl.content_id = kt.content_id
   where kt.is_active = true and kt.studio_name is not null;
 $$;
 
@@ -848,7 +965,12 @@ returns table (
   title_name text,
   thumbnail_url text,
   studio_name text,
-  download_count bigint
+  download_count bigint,
+  is_novel_origin boolean,
+  weekday text,
+  launch_date date,
+  total_comment_count bigint,
+  star_score numeric
 )
 language sql
 stable
@@ -863,14 +985,36 @@ as $$
     from series_snapshots ss
     join latest_series_date lsd
       on lsd.title_id = ss.title_id and lsd.snapshot_date = ss.snapshot_date
+  ),
+  naver_latest as (
+    select snapshot_date from title_snapshots order by snapshot_date desc limit 1
+  ),
+  naver_launch as (
+    select title_id, min(service_date) as launch_date from episodes group by title_id
+  ),
+  latest_comment_date as (
+    select max(snapshot_date) as snapshot_date from comment_snapshots
+  ),
+  comment_totals as (
+    select cs.title_id, sum(cs.comment_count) as total_comment_count
+    from comment_snapshots cs, latest_comment_date lcd
+    where cs.snapshot_date = lcd.snapshot_date
+    group by cs.title_id
   )
   select
     ti.title_id, ti.title_name, ti.thumbnail_url,
     coalesce(sa.canonical_name, ti.studio_name) as studio_name,
-    sl.download_count
+    sl.download_count, ti.is_novel_origin,
+    ts.weekday,
+    coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
+    ct.total_comment_count,
+    ts.star_score
   from titles ti
   join series_latest sl on sl.title_id = ti.title_id
   left join studio_aliases sa on sa.raw_name = ti.studio_name
+  left join title_snapshots ts on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from naver_latest)
+  left join naver_launch nl on nl.title_id = ti.title_id
+  left join comment_totals ct on ct.title_id = ti.title_id
   where ti.is_active = true
   order by sl.download_count desc
   limit result_limit;
@@ -1196,6 +1340,7 @@ as $$
 $$;
 
 -- 조회수/좋아요수 상위 작품 랭킹 - 카카오 홈 화면용. sort_by: 'views' | 'likes'
+drop function if exists kakao_top_titles(text, int);
 create or replace function kakao_top_titles(sort_by text default 'views', result_limit int default 10)
 returns table (
   content_id bigint,
@@ -1203,18 +1348,25 @@ returns table (
   thumbnail_url text,
   studio_name text,
   view_count bigint,
-  like_count bigint
+  like_count bigint,
+  launch_date date
 )
 language sql
 stable
 as $$
   with latest as (
     select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  ),
+  kakao_launch as (
+    select content_id, min(service_date) as launch_date from kakao_episodes group by content_id
   )
-  select kt.content_id, kt.title_name, kt.thumbnail_url, kt.studio_name, kss.view_count, kss.like_count
+  select
+    kt.content_id, kt.title_name, kt.thumbnail_url, kt.studio_name, kss.view_count, kss.like_count,
+    coalesce(kl.launch_date, kt.first_seen_at::date) as launch_date
   from kakao_stat_snapshots kss
   join latest on kss.snapshot_date = latest.snapshot_date
   join kakao_titles kt on kt.content_id = kss.content_id
+  left join kakao_launch kl on kl.content_id = kt.content_id
   where kt.is_active = true
   order by
     case when sort_by = 'likes' then kss.like_count else kss.view_count end desc nulls last
@@ -1229,35 +1381,57 @@ create or replace function kakao_titles_launched_recently(days_back int default 
 returns table (
   content_id bigint,
   title_name text,
-  thumbnail_url text
+  thumbnail_url text,
+  launch_date date,
+  view_count bigint
 )
 language sql
 stable
 as $$
-  select kt.content_id, kt.title_name, kt.thumbnail_url
+  with latest as (
+    select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  )
+  select kt.content_id, kt.title_name, kt.thumbnail_url, e.launch_date, kss.view_count
   from kakao_titles kt
   join (
     select content_id, min(service_date) as launch_date
     from kakao_episodes
     group by content_id
   ) e on e.content_id = kt.content_id
+  left join kakao_stat_snapshots kss
+    on kss.content_id = kt.content_id and kss.snapshot_date = (select snapshot_date from latest)
   where kt.is_active = true and kt.is_new = true and e.launch_date >= current_date - days_back
   order by e.launch_date desc;
 $$;
 
 -- 제작사(PUBLISHER 작가 표기)가 비어있는 연재중 작품 - 홈 화면 "제작사 정보 필요"용.
 -- 네이버의 titles.studio_name과 달리 "다중"류 특수값은 없고 null/빈 문자열만 있으면 됨.
+drop function if exists kakao_titles_needing_studio_fix();
 create or replace function kakao_titles_needing_studio_fix()
 returns table (
   content_id bigint,
   title_name text,
-  thumbnail_url text
+  thumbnail_url text,
+  launch_date date,
+  view_count bigint
 )
 language sql
 stable
 as $$
-  select kt.content_id, kt.title_name, kt.thumbnail_url
+  with latest as (
+    select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  ),
+  kakao_launch as (
+    select content_id, min(service_date) as launch_date from kakao_episodes group by content_id
+  )
+  select
+    kt.content_id, kt.title_name, kt.thumbnail_url,
+    coalesce(kl.launch_date, kt.first_seen_at::date) as launch_date,
+    kss.view_count
   from kakao_titles kt
+  left join kakao_launch kl on kl.content_id = kt.content_id
+  left join kakao_stat_snapshots kss
+    on kss.content_id = kt.content_id and kss.snapshot_date = (select snapshot_date from latest)
   where kt.is_active = true and kt.is_finished = false
     and (kt.studio_name is null or kt.studio_name = '')
   order by kt.title_name asc;
@@ -1267,3 +1441,94 @@ grant execute on function kakao_latest_snapshot_date() to anon;
 grant execute on function kakao_top_titles(text, int) to anon;
 grant execute on function kakao_titles_launched_recently(int) to anon;
 grant execute on function kakao_titles_needing_studio_fix() to anon;
+
+-- title_id 목록을 외부(라이브 실시간 랭킹 API, ilike 검색)에서 받아와 DB 랭킹 쿼리로는
+-- 성과 지표를 못 얻는 경우 공용으로 쓰는 일괄 조회 함수 (검색결과/실시간 랭킹 카드용)
+drop function if exists naver_titles_perf(bigint[]);
+create or replace function naver_titles_perf(target_ids bigint[])
+returns table (
+  title_id bigint,
+  weekday text,
+  popularity_rank integer,
+  launch_date date,
+  download_count bigint,
+  total_comment_count bigint,
+  star_score numeric
+)
+language sql
+stable
+as $$
+  with naver_latest as (
+    select snapshot_date from title_snapshots order by snapshot_date desc limit 1
+  ),
+  naver_comment_date as (
+    select max(snapshot_date) as snapshot_date from comment_snapshots
+  ),
+  naver_comment_totals as (
+    select cs.title_id, sum(cs.comment_count) as total_comment_count
+    from comment_snapshots cs, naver_comment_date d
+    where cs.snapshot_date = d.snapshot_date and cs.title_id = any(target_ids)
+    group by cs.title_id
+  ),
+  naver_launch as (
+    select title_id, min(service_date) as launch_date
+    from episodes where title_id = any(target_ids)
+    group by title_id
+  ),
+  latest_series_date as (
+    select title_id, max(snapshot_date) as snapshot_date
+    from series_snapshots where title_id = any(target_ids)
+    group by title_id
+  ),
+  series_latest as (
+    select ss.title_id, ss.download_count
+    from series_snapshots ss
+    join latest_series_date lsd on lsd.title_id = ss.title_id and lsd.snapshot_date = ss.snapshot_date
+  )
+  select
+    ti.title_id,
+    ts.weekday, ts.popularity_rank,
+    coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
+    sl.download_count,
+    ct.total_comment_count,
+    ts.star_score
+  from titles ti
+  left join title_snapshots ts on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from naver_latest)
+  left join naver_comment_totals ct on ct.title_id = ti.title_id
+  left join naver_launch nl on nl.title_id = ti.title_id
+  left join series_latest sl on sl.title_id = ti.title_id
+  where ti.title_id = any(target_ids);
+$$;
+
+grant execute on function naver_titles_perf(bigint[]) to anon;
+
+drop function if exists kakao_titles_perf(bigint[]);
+create or replace function kakao_titles_perf(target_ids bigint[])
+returns table (
+  content_id bigint,
+  launch_date date,
+  view_count bigint
+)
+language sql
+stable
+as $$
+  with latest as (
+    select snapshot_date from kakao_stat_snapshots order by snapshot_date desc limit 1
+  ),
+  kakao_launch as (
+    select content_id, min(service_date) as launch_date
+    from kakao_episodes where content_id = any(target_ids)
+    group by content_id
+  )
+  select
+    kt.content_id,
+    coalesce(kl.launch_date, kt.first_seen_at::date) as launch_date,
+    kss.view_count
+  from kakao_titles kt
+  left join kakao_stat_snapshots kss
+    on kss.content_id = kt.content_id and kss.snapshot_date = (select snapshot_date from latest)
+  left join kakao_launch kl on kl.content_id = kt.content_id
+  where kt.content_id = any(target_ids);
+$$;
+
+grant execute on function kakao_titles_perf(bigint[]) to anon;

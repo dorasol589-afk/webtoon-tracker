@@ -10,9 +10,21 @@ import {
   type KakaoStudioFixRow,
 } from "@/lib/queries";
 import { hasAdminAccess } from "@/lib/supabase";
+import { formatManwon } from "@/lib/format";
 import KakaoStudioNameEditor from "./KakaoStudioNameEditor";
 
 export const dynamic = "force-dynamic";
+
+const WEEKDAY_KO: Record<string, string> = {
+  MONDAY: "월",
+  TUESDAY: "화",
+  WEDNESDAY: "수",
+  THURSDAY: "목",
+  FRIDAY: "금",
+  SATURDAY: "토",
+  SUNDAY: "일",
+  DAILY_PLUS: "매일+",
+};
 
 function detailHref(r: { platform: string; id: number }): string {
   return r.platform === "kakao" ? `/kakao/webtoon/${r.id}` : `/webtoon/${r.id}`;
@@ -65,6 +77,7 @@ function RankingList({ title, rows, metricKey }: { title: string; rows: KakaoTop
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium hover:underline">{t.title_name}</span>
                   {t.studio_name && <span className="block truncate text-xs text-neutral-500">{t.studio_name}</span>}
+                  {t.launch_date && <span className="block truncate text-xs text-neutral-400">런칭 {t.launch_date}</span>}
                 </span>
               </Link>
               <span className="shrink-0 text-xs text-neutral-600">
@@ -123,7 +136,7 @@ export default async function KakaoHomePage({
                     className="h-auto w-14 shrink-0 rounded"
                   />
                 )}
-                <div>
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 font-medium">
                     <span
                       className={`rounded px-1.5 py-0.5 text-[10px] ${
@@ -138,6 +151,14 @@ export default async function KakaoHomePage({
                     )}
                   </div>
                   <div className="text-sm text-neutral-500">{r.author}</div>
+                  <div className="text-xs text-neutral-400">
+                    {r.launchDate && `런칭 ${r.launchDate}`}
+                    {r.platform === "naver" && r.weekday && r.popularityRank !== null &&
+                      ` · ${WEEKDAY_KO[r.weekday] ?? r.weekday}${r.weekday === "DAILY_PLUS" ? "" : "요일"} 인기 ${r.popularityRank}위`}
+                    {r.platform === "naver" && r.downloadCount !== null && ` · 다운 ${formatManwon(r.downloadCount)}`}
+                    {r.platform === "naver" && r.totalCommentCount !== null && ` · 댓글 ${r.totalCommentCount.toLocaleString()}`}
+                    {r.platform === "kakao" && r.viewCount !== null && ` · 조회 ${formatManwon(r.viewCount)}`}
+                  </div>
                 </div>
               </Link>
             </li>
@@ -167,10 +188,15 @@ export default async function KakaoHomePage({
                         alt=""
                         width={112}
                         height={145}
+                        loading="lazy"
                         className="mb-2 h-auto w-full rounded"
                       />
                     )}
                     <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                    <div className="text-xs text-neutral-400">
+                      {t.launch_date && `런칭 ${t.launch_date}`}
+                      {t.view_count !== null && ` · 조회 ${formatManwon(t.view_count)}`}
+                    </div>
                   </Link>
                 ))}
               </div>
@@ -194,10 +220,15 @@ export default async function KakaoHomePage({
                           alt=""
                           width={112}
                           height={145}
+                          loading="lazy"
                           className="mb-2 h-auto w-full rounded"
                         />
                       )}
                       <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                      <div className="text-xs text-neutral-400">
+                        {t.launch_date && `런칭 ${t.launch_date}`}
+                        {t.view_count !== null && ` · 조회 ${formatManwon(t.view_count)}`}
+                      </div>
                     </Link>
                     <KakaoStudioNameEditor contentId={t.content_id} studioName={null} readOnly={readOnly} />
                   </div>

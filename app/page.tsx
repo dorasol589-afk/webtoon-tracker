@@ -1,7 +1,6 @@
 import Link from "next/link";
 import {
   unifiedSearch,
-  getSeriesWatchlistLatest,
   getWeekdayPopularityRanking,
   getRealtimeRankingLive,
   getTagStats,
@@ -9,7 +8,6 @@ import {
   getTitlesNeedingStudioFix,
   getTopTitlesByDownload,
   type UnifiedSearchResult,
-  type SeriesWatchRow,
   type PopularityRankRow,
   type Weekday,
   type RealtimeRankRow,
@@ -47,6 +45,8 @@ const WEEKDAYS: { value: Weekday; label: string }[] = [
   { value: "DAILY_PLUS", label: "매일+" },
 ];
 
+const WEEKDAY_KO: Record<string, string> = Object.fromEntries(WEEKDAYS.map((w) => [w.value, w.label]));
+
 function getTodayWeekdayKST(): Weekday {
   const now = new Date();
   const kst = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
@@ -66,12 +66,90 @@ function isWeekday(value: string): value is Weekday {
   return WEEKDAYS.some((w) => w.value === value);
 }
 
-function DeltaBadge({ delta }: { delta: number }) {
-  if (delta <= 0) return null;
+/** 소설 원작 여부 배지 (article/list/info의 ARTIST_NOVEL_ORIGIN 크레딧으로 판별, titles.is_novel_origin) */
+function NovelOriginBadge() {
   return (
-    <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
-      +{delta.toLocaleString()}
+    <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
+      소설
     </span>
+  );
+}
+
+/** 네이버 작품 성과 요약 한 줄 (런칭일 + 연재요일/인기순위 + 다운로드수 + 총 댓글수) */
+function NaverPerfLine({
+  launchDate,
+  weekday,
+  popularityRank,
+  downloadCount,
+  totalCommentCount,
+}: {
+  launchDate: string | null;
+  weekday: string | null;
+  popularityRank: number | null;
+  downloadCount: number | null;
+  totalCommentCount: number | null;
+}) {
+  const parts: string[] = [];
+  if (launchDate) parts.push(`런칭 ${launchDate}`);
+  if (weekday) {
+    const dayLabel = `${WEEKDAY_KO[weekday] ?? weekday}${weekday === "DAILY_PLUS" ? "" : "요일"}`;
+    parts.push(popularityRank !== null ? `${dayLabel} 인기 ${popularityRank}위` : dayLabel);
+  }
+  if (downloadCount !== null) parts.push(`다운 ${formatManwon(downloadCount)}`);
+  if (totalCommentCount !== null) parts.push(`댓글 ${totalCommentCount.toLocaleString()}`);
+  if (parts.length === 0) return null;
+  return <div className="truncate text-xs text-neutral-400">{parts.join(" · ")}</div>;
+}
+
+/** 카카오 작품 성과 요약 한 줄 (런칭일 + 조회수만 - 인기순위/댓글수는 미제공) */
+function KakaoPerfLine({ launchDate, viewCount }: { launchDate: string | null; viewCount: number | null }) {
+  const parts: string[] = [];
+  if (launchDate) parts.push(`런칭 ${launchDate}`);
+  if (viewCount !== null) parts.push(`조회 ${formatManwon(viewCount)}`);
+  if (parts.length === 0) return null;
+  return <div className="truncate text-xs text-neutral-400">{parts.join(" · ")}</div>;
+}
+
+/** 네이버 작품 성과 지표 - 랭킹 목록 행 오른쪽에 세로로 쌓아 보여주는 버전 (/titles 페이지와 동일한 스타일) */
+function NaverStatStack({
+  starScore,
+  weekday,
+  popularityRank,
+  downloadCount,
+  totalCommentCount,
+  launchDate,
+}: {
+  starScore: number | null;
+  weekday: string | null;
+  popularityRank: number | null;
+  downloadCount: number | null;
+  totalCommentCount: number | null;
+  launchDate: string | null;
+}) {
+  return (
+    <div className="shrink-0 text-right text-xs text-neutral-500">
+      {starScore !== null && <div>★ {starScore.toFixed(2)}</div>}
+      {weekday && (
+        <div>
+          {WEEKDAY_KO[weekday] ?? weekday}
+          {weekday === "DAILY_PLUS" ? "" : "요일"}
+          {popularityRank !== null ? ` ${popularityRank}위` : ""}
+        </div>
+      )}
+      {downloadCount !== null && <div>다운 {formatManwon(downloadCount)}</div>}
+      {totalCommentCount !== null && <div>댓글 {totalCommentCount.toLocaleString()}개</div>}
+      {launchDate && <div className="text-neutral-400">런칭 {launchDate}</div>}
+    </div>
+  );
+}
+
+/** 카카오 버전 - 조회수 + 런칭일만 */
+function KakaoStatStack({ viewCount, launchDate }: { viewCount: number | null; launchDate: string | null }) {
+  return (
+    <div className="shrink-0 text-right text-xs text-neutral-500">
+      {viewCount !== null && <div>조회 {formatManwon(viewCount)}</div>}
+      {launchDate && <div className="text-neutral-400">런칭 {launchDate}</div>}
+    </div>
   );
 }
 
@@ -85,7 +163,6 @@ type LoadResult =
       weekdayRanking: PopularityRankRow[];
       selectedWeekday: Weekday;
       newReleaseRanking: RealtimeRankRow[];
-      seriesWatch: SeriesWatchRow[];
       genreStats: TagStatRow[];
       keywordStats: TagStatRow[];
       thisWeekLaunches: TitleListRow[];
@@ -108,7 +185,6 @@ async function loadData(
       realtimeRanking,
       weekdayRanking,
       newReleaseRanking,
-      seriesWatch,
       genreStats,
       keywordStats,
       thisWeekLaunches,
@@ -118,7 +194,6 @@ async function loadData(
       getRealtimeRankingLive(selectedGender),
       getWeekdayPopularityRanking(selectedWeekday, 5),
       getRealtimeRankingLive("TOTAL", "NEW"),
-      getSeriesWatchlistLatest(),
       getTagStats("GENRE", 15),
       getTagStats("KEYWORD", 15),
       getTitlesLaunchedThisWeek(),
@@ -132,7 +207,6 @@ async function loadData(
       weekdayRanking,
       selectedWeekday,
       newReleaseRanking,
-      seriesWatch,
       genreStats,
       keywordStats,
       thisWeekLaunches,
@@ -193,23 +267,38 @@ export default async function HomePage({
                     className="h-auto w-14 shrink-0 rounded"
                   />
                 )}
-                <div>
-                  <div className="flex items-center gap-1.5 font-medium">
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] ${
-                        r.platform === "kakao" ? "bg-yellow-100 text-yellow-800" : "bg-emerald-100 text-emerald-700"
-                      }`}
-                    >
-                      {r.platform === "kakao" ? "카카오" : "네이버"}
-                    </span>
-                    {r.titleName}
-                    {r.isAdult && (
-                      <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700">
-                        성인
+                <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 font-medium">
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] ${
+                          r.platform === "kakao" ? "bg-yellow-100 text-yellow-800" : "bg-emerald-100 text-emerald-700"
+                        }`}
+                      >
+                        {r.platform === "kakao" ? "카카오" : "네이버"}
                       </span>
-                    )}
+                      {r.titleName}
+                      {r.isAdult && (
+                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700">
+                          성인
+                        </span>
+                      )}
+                      {r.isNovelOrigin && <NovelOriginBadge />}
+                    </div>
+                    <div className="text-sm text-neutral-500">{r.author}</div>
                   </div>
-                  <div className="text-sm text-neutral-500">{r.author}</div>
+                  {r.platform === "kakao" ? (
+                    <KakaoStatStack viewCount={r.viewCount} launchDate={r.launchDate} />
+                  ) : (
+                    <NaverStatStack
+                      starScore={r.starScore}
+                      launchDate={r.launchDate}
+                      weekday={r.weekday}
+                      popularityRank={r.popularityRank}
+                      downloadCount={r.downloadCount}
+                      totalCommentCount={r.totalCommentCount}
+                    />
+                  )}
                 </div>
               </Link>
             </li>
@@ -236,10 +325,21 @@ export default async function HomePage({
                           alt=""
                           width={112}
                           height={145}
+                          loading="lazy"
                           className="mb-2 h-auto w-full rounded"
                         />
                       )}
-                      <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                      <div className="flex items-center gap-1">
+                        <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                        {t.is_novel_origin && <NovelOriginBadge />}
+                      </div>
+                      <NaverPerfLine
+                        launchDate={t.launch_date}
+                        weekday={t.weekday}
+                        popularityRank={t.popularity_rank}
+                        downloadCount={t.download_count}
+                        totalCommentCount={t.total_comment_count}
+                      />
                     </Link>
                     <StudioNameEditor titleId={t.title_id} studioName={t.studio_name} readOnly={readOnly} />
                   </div>
@@ -265,10 +365,21 @@ export default async function HomePage({
                           alt=""
                           width={112}
                           height={145}
+                          loading="lazy"
                           className="mb-2 h-auto w-full rounded"
                         />
                       )}
-                      <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                      <div className="flex items-center gap-1">
+                        <div className="truncate text-sm font-medium hover:underline">{t.title_name}</div>
+                        {t.is_novel_origin && <NovelOriginBadge />}
+                      </div>
+                      <NaverPerfLine
+                        launchDate={t.launch_date}
+                        weekday={t.weekday}
+                        popularityRank={t.popularity_rank}
+                        downloadCount={t.download_count}
+                        totalCommentCount={t.total_comment_count}
+                      />
                     </Link>
                     <StudioNameEditor titleId={t.title_id} studioName={t.studio_name} readOnly={readOnly} />
                   </div>
@@ -318,7 +429,20 @@ export default async function HomePage({
                           className="h-auto w-12 shrink-0 rounded"
                         />
                       )}
-                      <span className="flex-1 truncate text-sm font-medium">{r.title_name}</span>
+                      <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-1 text-sm font-medium">
+                          <span className="truncate">{r.title_name}</span>
+                          {r.is_novel_origin && <NovelOriginBadge />}
+                        </span>
+                        <NaverStatStack
+                          starScore={r.star_score}
+                          launchDate={r.launch_date}
+                          weekday={r.weekday}
+                          popularityRank={r.popularity_rank}
+                          downloadCount={r.download_count}
+                          totalCommentCount={r.total_comment_count}
+                        />
+                      </span>
                     </Link>
                   </li>
                 ))}
@@ -367,7 +491,20 @@ export default async function HomePage({
                           className="h-auto w-12 shrink-0 rounded"
                         />
                       )}
-                      <span className="flex-1 truncate text-sm font-medium">{r.title_name}</span>
+                      <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-1 text-sm font-medium">
+                          <span className="truncate">{r.title_name}</span>
+                          {r.is_novel_origin && <NovelOriginBadge />}
+                        </span>
+                        <NaverStatStack
+                          starScore={r.star_score}
+                          launchDate={r.launch_date}
+                          weekday={result.selectedWeekday}
+                          popularityRank={r.popularity_rank}
+                          downloadCount={r.download_count}
+                          totalCommentCount={r.total_comment_count}
+                        />
+                      </span>
                     </Link>
                   </li>
                 ))}
@@ -397,48 +534,26 @@ export default async function HomePage({
                           className="h-auto w-12 shrink-0 rounded"
                         />
                       )}
-                      <span className="flex-1 truncate text-sm font-medium">{r.title_name}</span>
+                      <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-1 text-sm font-medium">
+                          <span className="truncate">{r.title_name}</span>
+                          {r.is_novel_origin && <NovelOriginBadge />}
+                        </span>
+                        <NaverStatStack
+                          starScore={r.star_score}
+                          launchDate={r.launch_date}
+                          weekday={r.weekday}
+                          popularityRank={r.popularity_rank}
+                          downloadCount={r.download_count}
+                          totalCommentCount={r.total_comment_count}
+                        />
+                      </span>
                     </Link>
                   </li>
                 ))}
               </ol>
             </div>
           </div>
-
-          <section className="mt-8">
-            <h2 className="mb-3 text-sm font-semibold text-neutral-500">
-              네이버 시리즈 다운로드수 (우선 추적)
-            </h2>
-            <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
-              {result.seriesWatch.length === 0 && (
-                <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
-              )}
-              {result.seriesWatch.map((s) => (
-                <li key={s.product_no}>
-                  <Link
-                    href={`/webtoon/${s.title_id}`}
-                    className="flex items-center gap-3 p-2.5 hover:bg-neutral-50"
-                  >
-                    {s.thumbnail_url && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={s.thumbnail_url}
-                        alt=""
-                        width={48}
-                        height={62}
-                        className="h-auto w-12 shrink-0 rounded"
-                      />
-                    )}
-                    <span className="flex-1 truncate text-sm font-medium">{s.title_name}</span>
-                    <span className="shrink-0 text-xs text-neutral-600">
-                      {s.download_count.toLocaleString()}
-                      <DeltaBadge delta={s.delta} />
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ol>
-          </section>
 
           <section className="mt-8">
             <h2 className="mb-3 text-sm font-semibold text-neutral-500">다운로드 수 랭킹 TOP10</h2>
@@ -460,18 +575,28 @@ export default async function HomePage({
                         className="h-auto w-12 shrink-0 rounded"
                       />
                     )}
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium hover:underline">
-                        {t.title_name}
+                    <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-1">
+                          <span className="block truncate text-sm font-medium hover:underline">
+                            {t.title_name}
+                          </span>
+                          {t.is_novel_origin && <NovelOriginBadge />}
+                        </span>
+                        {t.studio_name && (
+                          <span className="block truncate text-xs text-neutral-500">{t.studio_name}</span>
+                        )}
                       </span>
-                      {t.studio_name && (
-                        <span className="block truncate text-xs text-neutral-500">{t.studio_name}</span>
-                      )}
+                      <NaverStatStack
+                        starScore={t.star_score}
+                        launchDate={t.launch_date}
+                        weekday={t.weekday}
+                        popularityRank={null}
+                        downloadCount={t.download_count}
+                        totalCommentCount={t.total_comment_count}
+                      />
                     </span>
                   </Link>
-                  <span className="shrink-0 text-xs text-neutral-600">
-                    {formatManwon(t.download_count)}
-                  </span>
                 </li>
               ))}
             </ol>
