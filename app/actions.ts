@@ -5,6 +5,6 @@ import { updateTitleStudioName } from "@/lib/queries";
 
 export async function updateTitleStudioNameAction(titleId: number, studioName: string) {
   await updateTitleStudioName(titleId, studioName);
-  revalidatePath("/");
+  revalidatePath("/rankings");
   revalidatePath("/studios", "layout");
 }

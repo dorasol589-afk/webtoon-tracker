@@ -113,6 +113,25 @@ create table if not exists job_posting_stars (
 );
 alter table job_posting_stars enable row level security;
 
+-- 사람인/잡코리아 자동 수집 대상이 아닌 곳(회사 자체 홈페이지, 다른 채용 사이트 등)에 올라온
+-- 공고를 직접 등록해서 한 곳에서 관리하기 위한 테이블. 공개 읽기(공유 URL 포함), 쓰기는
+-- 다른 관리자 전용 기능과 달리 이건 공유 URL에서도 보여야 하는 기능이라 select는 공개.
+create table if not exists manual_job_postings (
+  id            bigserial primary key,
+  title         text not null,
+  company_name  text,
+  url           text not null,
+  deadline_date date,
+  is_closed     boolean not null default false,
+  created_at    timestamptz not null default now()
+);
+alter table manual_job_postings enable row level security;
+
+drop policy if exists "manual_job_postings are publicly readable" on manual_job_postings;
+create policy "manual_job_postings are publicly readable"
+  on manual_job_postings for select
+  using (true);
+
 create table if not exists comment_snapshots (
   title_id      bigint not null,
   no            integer not null,
@@ -1530,5 +1549,51 @@ as $$
   left join kakao_launch kl on kl.content_id = kt.content_id
   where kt.content_id = any(target_ids);
 $$;
+
+-- 이용자별 관심작품 목록. 로그인 없이 닉네임만으로 구분(같은 닉네임을 쓰면 기기와 무관하게
+-- 같은 목록이 보임 - 다른 사람이 이름만 알면 볼 수도 있다는 트레이드오프를 감수한 선택).
+-- 댓글수/다운로드수 비교는 네이버 데이터에서만 가능해서(카카오는 댓글수 자체가 없음) 네이버
+-- title_id만 대상으로 함. 이 사이트에서 유일하게 공유 배포(Vercel)에서도 anon 키로 쓰기(추가/삭제)를
+-- 허용하는 테이블 - 일반 이용자가 직접 쓰는 공개 기능이라 "쓰기는 service role만" 규칙의 예외로 둠.
+create table if not exists user_watchlist (
+  user_name  text not null,
+  title_id   bigint not null references titles(title_id),
+  created_at timestamptz not null default now(),
+  primary key (user_name, title_id)
+);
+
+create index if not exists idx_user_watchlist_user on user_watchlist (user_name);
+
+alter table user_watchlist enable row level security;
+
+drop policy if exists "user_watchlist are publicly readable" on user_watchlist;
+create policy "user_watchlist are publicly readable"
+  on user_watchlist for select
+  using (true);
+
+drop policy if exists "user_watchlist are publicly writable" on user_watchlist;
+create policy "user_watchlist are publicly writable"
+  on user_watchlist for insert
+  with check (true);
+
+drop policy if exists "user_watchlist are publicly deletable" on user_watchlist;
+create policy "user_watchlist are publicly deletable"
+  on user_watchlist for delete
+  using (true);
+
+-- 작품 하나의 날짜별 총 댓글수 추이(회차별 누적 댓글수를 날짜별로 합산). 관심작품 비교 탭에서 사용.
+create or replace function title_comment_history(p_title_id bigint)
+returns table (snapshot_date date, total_comment_count bigint)
+language sql
+stable
+as $$
+  select snapshot_date, sum(comment_count)::bigint as total_comment_count
+  from comment_snapshots
+  where title_id = p_title_id
+  group by snapshot_date
+  order by snapshot_date;
+$$;
+
+grant execute on function title_comment_history(bigint) to anon;
 
 grant execute on function kakao_titles_perf(bigint[]) to anon;

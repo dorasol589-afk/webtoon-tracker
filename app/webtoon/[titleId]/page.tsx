@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { cookies } from "next/headers";
 import {
   getTitle,
   getEpisodesWithLatestCount,
@@ -10,13 +11,18 @@ import {
   getTitlePrivateNote,
   getPopularityRankHistory,
   getNaverTitlesPerf,
+  isTitleWatchlisted,
 } from "@/lib/queries";
 import SeriesDownloadChart from "./SeriesDownloadChart";
+import DownloadTrendChart from "./DownloadTrendChart";
+import RevenueEstimateSection from "./RevenueEstimateSection";
 import PopularityRankChart from "./PopularityRankChart";
 import TitleNotesForm from "./TitleNotesForm";
 import PrivateNoteForm from "./PrivateNoteForm";
 import StudioNameEditor from "@/app/StudioNameEditor";
+import WatchlistToggle from "@/app/WatchlistToggle";
 import { hasAdminAccess } from "@/lib/supabase";
+import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
 
 export const dynamic = "force-dynamic";
 
@@ -47,16 +53,20 @@ export default async function TitlePage({
   if (!title) notFound();
 
   const seriesProduct = await getSeriesProductForTitle(id);
+  const cookieStore = await cookies();
+  const watchlistUser = cookieStore.get(WATCHLIST_USER_COOKIE)?.value ?? null;
 
-  const [episodes, snapshot, seriesHistory, titleNotes, privateNote, rankHistory, perfMap] = await Promise.all([
-    getEpisodesWithLatestCount(id),
-    getLatestTitleSnapshot(id),
-    seriesProduct ? getSeriesHistory(seriesProduct.productNo) : Promise.resolve([]),
-    getTitleNotes(id),
-    getTitlePrivateNote(id),
-    getPopularityRankHistory(id),
-    getNaverTitlesPerf([id]),
-  ]);
+  const [episodes, snapshot, seriesHistory, titleNotes, privateNote, rankHistory, perfMap, watchlisted] =
+    await Promise.all([
+      getEpisodesWithLatestCount(id),
+      getLatestTitleSnapshot(id),
+      seriesProduct ? getSeriesHistory(seriesProduct.productNo) : Promise.resolve([]),
+      getTitleNotes(id),
+      getTitlePrivateNote(id),
+      getPopularityRankHistory(id),
+      getNaverTitlesPerf([id]),
+      watchlistUser ? isTitleWatchlisted(watchlistUser, id) : Promise.resolve(false),
+    ]);
   const perf = perfMap.get(id);
 
   const selectedTab = tab === "stats" ? "stats" : "list";
@@ -134,6 +144,7 @@ export default async function TitlePage({
               </a>
             )}
           </div>
+          <WatchlistToggle titleId={id} currentUser={watchlistUser} initialWatchlisted={watchlisted} />
           {snapshot && (
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
               {snapshot.star_score !== null && (
@@ -205,6 +216,20 @@ export default async function TitlePage({
             )}
           </h2>
           <SeriesDownloadChart data={seriesHistory} />
+        </div>
+      )}
+
+      {seriesProduct && seriesHistory.length > 0 && (
+        <div className="mb-6">
+          <h2 className="mb-2 text-sm font-semibold text-neutral-500">다운로드수 변화</h2>
+          <DownloadTrendChart data={seriesHistory} seriesWeekday={snapshot?.weekday} />
+        </div>
+      )}
+
+      {seriesProduct && seriesHistory.length > 0 && (
+        <div className="mb-6">
+          <h2 className="mb-2 text-sm font-semibold text-neutral-500">매출액 추정</h2>
+          <RevenueEstimateSection data={seriesHistory} seriesWeekday={snapshot?.weekday} />
         </div>
       )}
 

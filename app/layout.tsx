@@ -32,7 +32,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             </Link>
             <nav className="flex gap-4 text-sm text-neutral-500">
               <Link href="/" className="hover:text-neutral-900">
-                네이버웹툰
+                관심작품
+              </Link>
+              <Link href="/rankings" className="hover:text-neutral-900">
+                실시간 랭킹
               </Link>
               <Link href="/kakao" className="hover:text-neutral-900">
                 카카오웹툰

@@ -1,7 +1,27 @@
+/** 직접 등록한 공고의 마감일(date)을 "D-N"/"오늘마감"/"마감" 형태로 변환 (dday 텍스트가 아니라 실제 날짜를 입력받는 경우용) */
+export function formatDeadlineDday(deadlineDate: string | null): string | null {
+  if (!deadlineDate) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(deadlineDate + "T00:00:00");
+  const diffDays = Math.round((target.getTime() - today.getTime()) / 86400000);
+  if (diffDays < 0) return "마감";
+  if (diffDays === 0) return "오늘마감";
+  return `D-${diffDays}`;
+}
+
 /** 다운로드수 등 큰 숫자를 "1,234만" 형태로 표기. 0/null은 데이터 없음으로 간주해 "-" 표시 */
 export function formatManwon(count: number): string {
   if (!count) return "-";
   return `${Math.round(count / 10000).toLocaleString()}만`;
+}
+
+/** 추정 매출액 등 금액을 "1,234만원"/"5,000원" 형태로 표기. formatManwon과 달리 0도 유효한 값이라 "-" 처리하지 않음 */
+export function formatWon(amount: number): string {
+  if (Math.abs(amount) >= 10000) {
+    return `${Math.round(amount / 10000).toLocaleString()}만원`;
+  }
+  return `${Math.round(amount).toLocaleString()}원`;
 }
 
 /**

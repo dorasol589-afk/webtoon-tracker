@@ -1395,6 +1395,72 @@ export async function setJobStarred(source: string, postingId: string, starred: 
   }
 }
 
+export interface ManualJobPostingRow {
+  id: number;
+  title: string;
+  companyName: string | null;
+  url: string;
+  deadlineDate: string | null;
+  isClosed: boolean;
+}
+
+/** 사람인/잡코리아 자동 수집 대상이 아닌 곳(회사 홈페이지 등)에 올라온 공고를 직접 등록한 목록.
+ * 공유 URL에서도 보이는 공개 기능(anon SELECT 허용) - 쓰기만 관리자 전용. */
+export async function getManualJobPostings(): Promise<ManualJobPostingRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("manual_job_postings")
+    .select("id,title,company_name,url,deadline_date,is_closed")
+    .order("is_closed", { ascending: true })
+    .order("deadline_date", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return ((data ?? []) as { id: number; title: string; company_name: string | null; url: string; deadline_date: string | null; is_closed: boolean }[]).map(
+    (r) => ({
+      id: r.id,
+      title: r.title,
+      companyName: r.company_name,
+      url: r.url,
+      deadlineDate: r.deadline_date,
+      isClosed: r.is_closed,
+    })
+  );
+}
+
+/** 직접 등록한 공고 추가 */
+export async function addManualJobPosting(input: {
+  title: string;
+  companyName: string;
+  url: string;
+  deadlineDate: string;
+}): Promise<void> {
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.from("manual_job_postings").insert({
+    title: input.title,
+    company_name: input.companyName || null,
+    url: input.url,
+    deadline_date: input.deadlineDate || null,
+  });
+  if (error) throw error;
+}
+
+/** 직접 등록한 공고 마감 처리 토글 */
+export async function setManualJobPostingClosed(id: number, closed: boolean): Promise<void> {
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.from("manual_job_postings").update({ is_closed: closed }).eq("id", id);
+  if (error) throw error;
+}
+
+/** 직접 등록한 공고 삭제 */
+export async function deleteManualJobPosting(id: number): Promise<void> {
+  assertAdminAccess();
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.from("manual_job_postings").delete().eq("id", id);
+  if (error) throw error;
+}
+
 /**
  * 채용정보 링크 등록 여부 - 제작사 상세페이지에서 메시지 분기용.
  * null: studio_recruit_links에 아예 등록 안 됨 -> "사이트 내 기업 정보가 없습니다."
@@ -1681,4 +1747,90 @@ export async function unifiedSearch(query: string): Promise<UnifiedSearchResult[
     }),
   ];
   return combined.sort((a, b) => a.titleName.localeCompare(b.titleName, "ko"));
+}
+
+// --- 관심작품(닉네임 기반, 로그인 없음) ---
+// 댓글수/다운로드수 비교가 네이버 데이터에서만 가능해(카카오는 댓글수 자체가 없음) 네이버 title_id만 대상으로 함.
+// user_watchlist는 이 사이트에서 유일하게 anon 키로 쓰기(추가/삭제)가 허용된 테이블.
+
+export interface WatchlistEntry {
+  titleId: number;
+  createdAt: string;
+}
+
+export async function getWatchlist(userName: string): Promise<WatchlistEntry[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("user_watchlist")
+    .select("title_id,created_at")
+    .eq("user_name", userName)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((r) => ({ titleId: r.title_id as number, createdAt: r.created_at as string }));
+}
+
+export async function isTitleWatchlisted(userName: string, titleId: number): Promise<boolean> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("user_watchlist")
+    .select("title_id")
+    .eq("user_name", userName)
+    .eq("title_id", titleId)
+    .maybeSingle();
+  if (error) throw error;
+  return !!data;
+}
+
+export async function addToWatchlist(userName: string, titleId: number): Promise<void> {
+  const supabase = getSupabaseAnon();
+  const { error } = await supabase.from("user_watchlist").insert({ user_name: userName, title_id: titleId });
+  if (error && error.code !== "23505") throw error; // 이미 추가된 작품(중복 pk)은 조용히 무시
+}
+
+export async function removeFromWatchlist(userName: string, titleId: number): Promise<void> {
+  const supabase = getSupabaseAnon();
+  const { error } = await supabase
+    .from("user_watchlist")
+    .delete()
+    .eq("user_name", userName)
+    .eq("title_id", titleId);
+  if (error) throw error;
+}
+
+export interface TitleBasic {
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  is_novel_origin: boolean;
+}
+
+export async function getTitlesBasic(titleIds: number[]): Promise<Map<number, TitleBasic>> {
+  if (titleIds.length === 0) return new Map();
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase
+    .from("titles")
+    .select("title_id,title_name,thumbnail_url,is_novel_origin")
+    .in("title_id", titleIds);
+  if (error) throw error;
+  return new Map((data ?? []).map((t) => [t.title_id as number, t as TitleBasic]));
+}
+
+export interface TitleCommentHistoryPoint {
+  snapshot_date: string;
+  total_comment_count: number;
+}
+
+/** 작품 하나의 날짜별 총 댓글수 추이(회차별 누적 댓글수를 날짜별로 합산) */
+export async function getTitleCommentHistory(titleId: number): Promise<TitleCommentHistoryPoint[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("title_comment_history", { p_title_id: titleId });
+  if (error) throw error;
+  return (data ?? []) as TitleCommentHistoryPoint[];
+}
+
+/** getSeriesHistory의 title_id 기반 버전 (series_products에서 product_no를 먼저 찾음) */
+export async function getDownloadHistoryByTitleId(titleId: number): Promise<SeriesSnapshotPoint[]> {
+  const product = await getSeriesProductForTitle(titleId);
+  if (!product) return [];
+  return getSeriesHistory(product.productNo);
 }
