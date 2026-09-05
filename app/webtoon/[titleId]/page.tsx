@@ -14,7 +14,6 @@ import {
   isTitleWatchlisted,
 } from "@/lib/queries";
 import SeriesDownloadChart from "./SeriesDownloadChart";
-import DownloadTrendChart from "./DownloadTrendChart";
 import RevenueEstimateSection from "./RevenueEstimateSection";
 import PopularityRankChart from "./PopularityRankChart";
 import TitleNotesForm from "./TitleNotesForm";
@@ -215,14 +214,7 @@ export default async function TitlePage({
               </span>
             )}
           </h2>
-          <SeriesDownloadChart data={seriesHistory} />
-        </div>
-      )}
-
-      {seriesProduct && seriesHistory.length > 0 && (
-        <div className="mb-6">
-          <h2 className="mb-2 text-sm font-semibold text-neutral-500">다운로드수 변화</h2>
-          <DownloadTrendChart data={seriesHistory} seriesWeekday={snapshot?.weekday} />
+          <SeriesDownloadChart data={seriesHistory} seriesWeekday={snapshot?.weekday} />
         </div>
       )}
 
