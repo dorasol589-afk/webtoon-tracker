@@ -89,7 +89,14 @@ function ComparisonChart({
             />
             {withData.map((s) =>
               variant === "bar" ? (
-                <Bar key={s.titleId} dataKey={String(s.titleId)} name={s.titleName} fill={colorFor(s)}>
+                <Bar
+                  key={s.titleId}
+                  dataKey={String(s.titleId)}
+                  name={s.titleName}
+                  fill={colorFor(s)}
+                  onMouseEnter={() => highlight(String(s.titleId))}
+                  onMouseLeave={() => highlight(null)}
+                >
                   <LabelList
                     dataKey={String(s.titleId)}
                     position="top"
