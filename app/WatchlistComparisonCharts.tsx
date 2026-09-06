@@ -1,6 +1,6 @@
 "use client";
 
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { formatWon } from "@/lib/format";
 import { formatCalendarWeekLabel } from "@/lib/seriesTrend";
 
@@ -29,10 +29,12 @@ function ComparisonChart({
   series,
   valueFormatter = (v) => v.toLocaleString(),
   xLabelFormatter = (d) => d,
+  variant = "line",
 }: {
   series: ComparisonSeries[];
   valueFormatter?: (value: number) => string;
   xLabelFormatter?: (date: string) => string;
+  variant?: "line" | "bar";
 }) {
   const withData = series.filter((s) => s.points.length > 0);
   if (withData.length === 0) {
@@ -43,11 +45,12 @@ function ComparisonChart({
     );
   }
   const chartData = mergeSeries(withData);
+  const ChartComponent = variant === "bar" ? BarChart : LineChart;
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
       <div className="h-80 w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+          <ChartComponent data={chartData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
             <XAxis dataKey="snapshot_date" tick={{ fontSize: 12 }} tickFormatter={xLabelFormatter} />
             <YAxis tick={{ fontSize: 12 }} width={60} tickFormatter={(v) => valueFormatter(Number(v))} />
@@ -56,19 +59,23 @@ function ComparisonChart({
               formatter={(value) => [value == null ? "-" : valueFormatter(Number(value)), ""]}
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />
-            {withData.map((s, i) => (
-              <Line
-                key={s.titleId}
-                type="monotone"
-                dataKey={String(s.titleId)}
-                name={s.titleName}
-                stroke={COLORS[i % COLORS.length]}
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-              />
-            ))}
-          </LineChart>
+            {withData.map((s, i) =>
+              variant === "bar" ? (
+                <Bar key={s.titleId} dataKey={String(s.titleId)} name={s.titleName} fill={COLORS[i % COLORS.length]} />
+              ) : (
+                <Line
+                  key={s.titleId}
+                  type="monotone"
+                  dataKey={String(s.titleId)}
+                  name={s.titleName}
+                  stroke={COLORS[i % COLORS.length]}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                />
+              )
+            )}
+          </ChartComponent>
         </ResponsiveContainer>
       </div>
     </div>
@@ -84,5 +91,12 @@ export function DownloadComparisonChart({ series }: { series: ComparisonSeries[]
 }
 
 export function RevenueComparisonChart({ series }: { series: ComparisonSeries[] }) {
-  return <ComparisonChart series={series} valueFormatter={formatWon} xLabelFormatter={formatCalendarWeekLabel} />;
+  return (
+    <ComparisonChart
+      series={series}
+      valueFormatter={formatWon}
+      xLabelFormatter={formatCalendarWeekLabel}
+      variant="bar"
+    />
+  );
 }
