@@ -66,11 +66,12 @@ function ComparisonChart({
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
             <XAxis dataKey="snapshot_date" tick={{ fontSize: 12 }} tickFormatter={xLabelFormatter} />
             <YAxis tick={{ fontSize: 12 }} width={60} tickFormatter={(v) => valueFormatter(Number(v))} />
-            <Tooltip
-              position={variant === "bar" ? { y: 0 } : undefined}
-              labelFormatter={(label) => xLabelFormatter(String(label))}
-              formatter={(value) => [value == null ? "-" : valueFormatter(Number(value)), ""]}
-            />
+            {variant !== "bar" && (
+              <Tooltip
+                labelFormatter={(label) => xLabelFormatter(String(label))}
+                formatter={(value) => [value == null ? "-" : valueFormatter(Number(value)), ""]}
+              />
+            )}
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {withData.map((s, i) =>
               variant === "bar" ? (
