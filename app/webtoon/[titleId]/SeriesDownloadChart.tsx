@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import type { SeriesSnapshotPoint } from "@/lib/queries";
-import { aggregateSeries, getAnchorWeekday, type Granularity } from "@/lib/seriesTrend";
+import { aggregateSeries, getAnchorWeekday, toDeltaSeries, type Granularity } from "@/lib/seriesTrend";
 
 const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
   { value: "day", label: "일별" },
@@ -20,10 +20,12 @@ export default function SeriesDownloadChart({
 }) {
   const [granularity, setGranularity] = useState<Granularity>("day");
   const anchorWeekday = useMemo(() => getAnchorWeekday(seriesWeekday), [seriesWeekday]);
-  const chartData = useMemo(
-    () => aggregateSeries(data, granularity, anchorWeekday),
-    [data, granularity, anchorWeekday]
-  );
+  // 누적값 옆에 그 구간에 얼마나 늘었는지(변화량)도 툴팁에 같이 보여주기 위해 델타를 미리 계산해둔다.
+  const chartData = useMemo(() => {
+    const aggregated = aggregateSeries(data, granularity, anchorWeekday);
+    const deltaByDate = new Map(toDeltaSeries(aggregated).map((d) => [d.snapshot_date, d.delta]));
+    return aggregated.map((p) => ({ ...p, delta: deltaByDate.get(p.snapshot_date) ?? null }));
+  }, [data, granularity, anchorWeekday]);
 
   if (data.length === 0) {
     return (
@@ -57,7 +59,14 @@ export default function SeriesDownloadChart({
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
             <XAxis dataKey="snapshot_date" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 12 }} width={60} />
-            <Tooltip formatter={(value) => [Number(value).toLocaleString(), "다운로드수"]} />
+            <Tooltip
+              formatter={(value, name, props) => {
+                const delta = (props?.payload as { delta: number | null } | undefined)?.delta;
+                const deltaText =
+                  delta == null ? "" : ` (${delta >= 0 ? "▲" : "▼"}${Math.abs(delta).toLocaleString()})`;
+                return [`${Number(value).toLocaleString()}${deltaText}`, "다운로드수"];
+              }}
+            />
             <Line type="monotone" dataKey="download_count" stroke="#059669" strokeWidth={2} dot={{ r: 3 }} />
           </LineChart>
         </ResponsiveContainer>
