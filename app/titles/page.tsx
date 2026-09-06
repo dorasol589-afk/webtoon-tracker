@@ -1,14 +1,18 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import {
   listTitlesUnified,
   getTagStats,
+  getWatchlist,
   type TitleSortBy,
   type TitleStatusFilter,
   type TitleTypeFilter,
   type TitlePlatformFilter,
 } from "@/lib/queries";
+import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
 import FilterControls from "./FilterControls";
 import ExportButton from "./ExportButton";
+import WatchlistStarButton from "@/app/WatchlistStarButton";
 
 export const dynamic = "force-dynamic";
 
@@ -126,6 +130,10 @@ export default async function TitlesPage({
   }
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
+  const cookieStore = await cookies();
+  const watchlistUser = cookieStore.get(WATCHLIST_USER_COOKIE)?.value ?? null;
+  const watchlistedIds = new Set(watchlistUser ? (await getWatchlist(watchlistUser)).map((e) => e.titleId) : []);
+
   let genreOptions: string[] = [];
   try {
     const tagStats = await getTagStats("GENRE", 30);
@@ -175,10 +183,10 @@ export default async function TitlesPage({
           <li className="p-4 text-sm text-neutral-500">조건에 맞는 작품이 없습니다.</li>
         )}
         {rows.map((t) => (
-          <li key={`${t.platform}-${t.id}`}>
+          <li key={`${t.platform}-${t.id}`} className="flex items-center gap-2 pr-3 hover:bg-neutral-50">
             <Link
               href={t.platform === "kakao" ? `/kakao/webtoon/${t.id}` : `/webtoon/${t.id}`}
-              className="flex items-center gap-3 p-3 hover:bg-neutral-50"
+              className="flex min-w-0 flex-1 items-center gap-3 p-3"
             >
               {t.thumbnail_url && (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -241,6 +249,13 @@ export default async function TitlesPage({
                 {t.launch_date && <div className="text-neutral-400">런칭 {t.launch_date}</div>}
               </div>
             </Link>
+            {t.platform === "naver" && (
+              <WatchlistStarButton
+                titleId={t.id}
+                currentUser={watchlistUser}
+                initialWatchlisted={watchlistedIds.has(t.id)}
+              />
+            )}
           </li>
         ))}
       </ul>
