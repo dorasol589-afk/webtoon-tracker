@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   LineChart,
   Line,
@@ -15,15 +15,16 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { formatWon } from "@/lib/format";
-import { formatCalendarWeekLabel } from "@/lib/seriesTrend";
+import { formatCalendarWeekLabel, formatMonthLabel, aggregateByCalendarWeek, aggregateByCalendarMonth } from "@/lib/seriesTrend";
 
 export interface ComparisonSeries {
   titleId: number;
   titleName: string;
+  /** 댓글수/다운로드수/매출액 세 차트에서 같은 작품이 항상 같은 색을 쓰도록 호출하는 쪽(app/page.tsx)에서 고정해서 넘김 */
+  color: string;
   points: { snapshot_date: string; value: number }[];
 }
 
-const COLORS = ["#2563eb", "#059669", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#db2777", "#65a30d"];
 const INACTIVE_COLOR = "#d1d5db";
 
 /** 작품마다 관측일이 달라도 하나의 그래프에서 비교할 수 있도록 날짜 기준으로 병합 (없는 날짜는 null → 선이 끊기지 않게 connectNulls로 이음) */
@@ -44,11 +45,13 @@ function ComparisonChart({
   valueFormatter = (v) => v.toLocaleString(),
   xLabelFormatter = (d) => d,
   variant = "line",
+  headerControls,
 }: {
   series: ComparisonSeries[];
   valueFormatter?: (value: number) => string;
   xLabelFormatter?: (date: string) => string;
   variant?: "line" | "bar";
+  headerControls?: ReactNode;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const withData = series.filter((s) => s.points.length > 0);
@@ -61,12 +64,12 @@ function ComparisonChart({
   }
   const chartData = mergeSeries(withData);
   const ChartComponent = variant === "bar" ? BarChart : LineChart;
-  const colorFor = (titleId: number, i: number) =>
-    activeId === null || activeId === String(titleId) ? COLORS[i % COLORS.length] : INACTIVE_COLOR;
+  const colorFor = (s: ComparisonSeries) => (activeId === null || activeId === String(s.titleId) ? s.color : INACTIVE_COLOR);
   const highlight = (id: string | null) => setActiveId(id);
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
+      {headerControls && <div className="mb-2 flex justify-end gap-1">{headerControls}</div>}
       <div className="h-80 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <ChartComponent data={chartData} margin={{ top: variant === "bar" ? 24 : 10, right: 20, bottom: 0, left: 0 }}>
@@ -84,21 +87,14 @@ function ComparisonChart({
               onMouseEnter={(o) => highlight(o.dataKey != null ? String(o.dataKey) : null)}
               onMouseLeave={() => highlight(null)}
             />
-            {withData.map((s, i) =>
+            {withData.map((s) =>
               variant === "bar" ? (
-                <Bar
-                  key={s.titleId}
-                  dataKey={String(s.titleId)}
-                  name={s.titleName}
-                  fill={colorFor(s.titleId, i)}
-                  onMouseEnter={() => highlight(String(s.titleId))}
-                  onMouseLeave={() => highlight(null)}
-                >
+                <Bar key={s.titleId} dataKey={String(s.titleId)} name={s.titleName} fill={colorFor(s)}>
                   <LabelList
                     dataKey={String(s.titleId)}
                     position="top"
                     fontSize={9}
-                    fill={colorFor(s.titleId, i)}
+                    fill={colorFor(s)}
                     formatter={(v) => (v == null ? "" : Math.round(Number(v) / 10000).toLocaleString())}
                   />
                 </Bar>
@@ -108,7 +104,7 @@ function ComparisonChart({
                   type="monotone"
                   dataKey={String(s.titleId)}
                   name={s.titleName}
-                  stroke={colorFor(s.titleId, i)}
+                  stroke={colorFor(s)}
                   strokeWidth={activeId === String(s.titleId) ? 3 : 2}
                   dot={false}
                   connectNulls
@@ -128,8 +124,50 @@ export function CommentComparisonChart({ series }: { series: ComparisonSeries[] 
   return <ComparisonChart series={series} />;
 }
 
+type Granularity = "day" | "week" | "month";
+
+const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
+  { value: "day", label: "일별" },
+  { value: "week", label: "주별" },
+  { value: "month", label: "월별" },
+];
+
+/** 다운로드수 비교는 주별/월별로 볼 때도 작품마다 관측일이 달라 병합이 어긋나지 않도록
+ * 달력 기준(월요일 시작 주 / 매월 1일)으로 정규화해서 다시 집계한다. */
+function reaggregatePoints(points: { snapshot_date: string; value: number }[], granularity: Granularity) {
+  if (granularity === "day") return points;
+  const asSnapshots = points.map((p) => ({ snapshot_date: p.snapshot_date, download_count: p.value }));
+  const aggregated = granularity === "week" ? aggregateByCalendarWeek(asSnapshots) : aggregateByCalendarMonth(asSnapshots);
+  return aggregated.map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count }));
+}
+
 export function DownloadComparisonChart({ series }: { series: ComparisonSeries[] }) {
-  return <ComparisonChart series={series} />;
+  const [granularity, setGranularity] = useState<Granularity>("day");
+  const adjustedSeries = useMemo(
+    () => series.map((s) => ({ ...s, points: reaggregatePoints(s.points, granularity) })),
+    [series, granularity]
+  );
+  const xLabelFormatter =
+    granularity === "week" ? formatCalendarWeekLabel : granularity === "month" ? formatMonthLabel : (d: string) => d;
+
+  return (
+    <ComparisonChart
+      series={adjustedSeries}
+      xLabelFormatter={xLabelFormatter}
+      headerControls={GRANULARITY_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => setGranularity(opt.value)}
+          className={`rounded px-2 py-1 text-xs ${
+            granularity === opt.value ? "bg-neutral-800 text-white" : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    />
+  );
 }
 
 export function RevenueComparisonChart({ series }: { series: ComparisonSeries[] }) {

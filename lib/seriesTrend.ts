@@ -121,6 +121,29 @@ export function aggregateByCalendarWeek(data: SeriesSnapshotPoint[]): SeriesSnap
     .map(([week, point]) => ({ snapshot_date: week, download_count: point.download_count }));
 }
 
+/** "2026-08-29" 같은 값을 "8월"로 표기(비교 탭의 월간 보기용 라벨). */
+export function formatMonthLabel(dateStr: string): string {
+  const [, m] = dateStr.split("-").map(Number);
+  return `${m}월`;
+}
+
+/** aggregateSeries(..., "month", ...)는 그 달의 마지막 "관측일 그대로"를 키로 써서, 작품마다
+ * 마지막 관측일이 달라(예: 8/29 vs 8/31) 병합 시 같은 달인데도 다른 열로 갈라지는 문제가 있다.
+ * 비교 탭에서는 그 달의 1일로 정규화한 날짜를 키로 써서 모든 작품이 같은 달끼리 묶이게 한다. */
+export function aggregateByCalendarMonth(data: SeriesSnapshotPoint[]): SeriesSnapshotPoint[] {
+  const groups = new Map<string, SeriesSnapshotPoint>();
+  for (const point of data) {
+    const monthKey = `${point.snapshot_date.slice(0, 7)}-01`;
+    const existing = groups.get(monthKey);
+    if (!existing || point.snapshot_date > existing.snapshot_date) {
+      groups.set(monthKey, point);
+    }
+  }
+  return Array.from(groups.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, point]) => ({ snapshot_date: month, download_count: point.download_count }));
+}
+
 export interface DeltaPoint {
   snapshot_date: string;
   delta: number;

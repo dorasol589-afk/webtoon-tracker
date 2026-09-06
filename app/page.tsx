@@ -9,6 +9,7 @@ import {
 } from "@/lib/queries";
 import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
 import { aggregateByCalendarWeek, toDeltaSeries } from "@/lib/seriesTrend";
+import { COMPARISON_COLORS } from "@/lib/chartColors";
 import { NovelOriginBadge, NaverStatStack } from "@/app/PerfBadges";
 import NicknameSwitcher from "@/app/NicknameSwitcher";
 import WatchlistRemoveButton from "@/app/WatchlistRemoveButton";
@@ -70,14 +71,20 @@ async function WatchlistBody({ userName }: { userName: string }) {
     Promise.all(titleIds.map((id) => getDownloadHistoryByTitleId(id))),
   ]);
 
+  // 댓글수/다운로드수/매출액 세 차트가 각자 필터링한 목록의 인덱스가 아니라 이 고정 색을 써서,
+  // 같은 작품은 어느 차트에서든 항상 같은 색으로 보이게 한다.
+  const colorOf = (id: number) => COMPARISON_COLORS[titleIds.indexOf(id) % COMPARISON_COLORS.length];
+
   const commentSeries = titleIds.map((id, i) => ({
     titleId: id,
     titleName: titleBasics.get(id)?.title_name ?? `#${id}`,
+    color: colorOf(id),
     points: commentHistories[i].map((p) => ({ snapshot_date: p.snapshot_date, value: p.total_comment_count })),
   }));
   const downloadSeries = titleIds.map((id, i) => ({
     titleId: id,
     titleName: titleBasics.get(id)?.title_name ?? `#${id}`,
+    color: colorOf(id),
     points: downloadHistories[i].map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count })),
   }));
   const revenueSeries = titleIds.map((id, i) => {
@@ -85,6 +92,7 @@ async function WatchlistBody({ userName }: { userName: string }) {
     return {
       titleId: id,
       titleName: titleBasics.get(id)?.title_name ?? `#${id}`,
+      color: colorOf(id),
       points: toDeltaSeries(weekly).map((p) => ({ snapshot_date: p.snapshot_date, value: p.delta * PRICE_PER_DOWNLOAD })),
     };
   });
