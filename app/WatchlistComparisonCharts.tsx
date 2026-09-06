@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   LineChart,
   Line,
@@ -23,6 +24,7 @@ export interface ComparisonSeries {
 }
 
 const COLORS = ["#2563eb", "#059669", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#db2777", "#65a30d"];
+const INACTIVE_COLOR = "#d1d5db";
 
 /** 작품마다 관측일이 달라도 하나의 그래프에서 비교할 수 있도록 날짜 기준으로 병합 (없는 날짜는 null → 선이 끊기지 않게 connectNulls로 이음) */
 function mergeSeries(seriesList: ComparisonSeries[]) {
@@ -48,6 +50,7 @@ function ComparisonChart({
   xLabelFormatter?: (date: string) => string;
   variant?: "line" | "bar";
 }) {
+  const [activeId, setActiveId] = useState<string | null>(null);
   const withData = series.filter((s) => s.points.length > 0);
   if (withData.length === 0) {
     return (
@@ -58,6 +61,10 @@ function ComparisonChart({
   }
   const chartData = mergeSeries(withData);
   const ChartComponent = variant === "bar" ? BarChart : LineChart;
+  const colorFor = (titleId: number, i: number) =>
+    activeId === null || activeId === String(titleId) ? COLORS[i % COLORS.length] : INACTIVE_COLOR;
+  const highlight = (id: string | null) => setActiveId(id);
+
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
       <div className="h-80 w-full">
@@ -72,15 +79,26 @@ function ComparisonChart({
                 formatter={(value) => [value == null ? "-" : valueFormatter(Number(value)), ""]}
               />
             )}
-            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Legend
+              wrapperStyle={{ fontSize: 12, cursor: "pointer" }}
+              onMouseEnter={(o) => highlight(o.dataKey != null ? String(o.dataKey) : null)}
+              onMouseLeave={() => highlight(null)}
+            />
             {withData.map((s, i) =>
               variant === "bar" ? (
-                <Bar key={s.titleId} dataKey={String(s.titleId)} name={s.titleName} fill={COLORS[i % COLORS.length]}>
+                <Bar
+                  key={s.titleId}
+                  dataKey={String(s.titleId)}
+                  name={s.titleName}
+                  fill={colorFor(s.titleId, i)}
+                  onMouseEnter={() => highlight(String(s.titleId))}
+                  onMouseLeave={() => highlight(null)}
+                >
                   <LabelList
                     dataKey={String(s.titleId)}
                     position="top"
                     fontSize={9}
-                    fill={COLORS[i % COLORS.length]}
+                    fill={colorFor(s.titleId, i)}
                     formatter={(v) => (v == null ? "" : Math.round(Number(v) / 10000).toLocaleString())}
                   />
                 </Bar>
@@ -90,10 +108,12 @@ function ComparisonChart({
                   type="monotone"
                   dataKey={String(s.titleId)}
                   name={s.titleName}
-                  stroke={COLORS[i % COLORS.length]}
-                  strokeWidth={2}
+                  stroke={colorFor(s.titleId, i)}
+                  strokeWidth={activeId === String(s.titleId) ? 3 : 2}
                   dot={false}
                   connectNulls
+                  onMouseEnter={() => highlight(String(s.titleId))}
+                  onMouseLeave={() => highlight(null)}
                 />
               )
             )}
