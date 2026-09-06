@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { StudioGroup } from "@/lib/queries";
 import { formatManwon } from "@/lib/format";
+import WatchlistStarButton from "@/app/WatchlistStarButton";
 
 const WEEKDAY_KO: Record<string, string> = {
   MONDAY: "월",
@@ -18,9 +19,18 @@ const WEEKDAY_KO: Record<string, string> = {
 
 type SortBy = "titleCount" | "downloadCount" | "viewCount";
 
-export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
+export default function StudioSearch({
+  groups,
+  watchlistUser,
+  watchlistedTitleIds,
+}: {
+  groups: StudioGroup[];
+  watchlistUser: string | null;
+  watchlistedTitleIds: number[];
+}) {
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("titleCount");
+  const watchlistedIds = useMemo(() => new Set(watchlistedTitleIds), [watchlistedTitleIds]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -88,10 +98,18 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
           </h2>
           <div className="flex gap-3 overflow-x-auto pb-1">
             {group.titles.map((t) => (
+              <div key={`${t.platform}-${t.id}`} className="relative w-28 shrink-0">
+                {t.platform === "naver" && (
+                  <WatchlistStarButton
+                    titleId={t.id}
+                    currentUser={watchlistUser}
+                    initialWatchlisted={watchlistedIds.has(t.id)}
+                    className="absolute right-1 top-1 rounded-full bg-white/90 shadow-sm"
+                  />
+                )}
               <Link
-                key={`${t.platform}-${t.id}`}
                 href={t.platform === "kakao" ? `/kakao/webtoon/${t.id}` : `/webtoon/${t.id}`}
-                className="w-28 shrink-0 rounded-lg border border-neutral-200 bg-white p-2 hover:bg-neutral-50"
+                className="block rounded-lg border border-neutral-200 bg-white p-2 hover:bg-neutral-50"
               >
                 {t.thumbnail_url && (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -129,6 +147,7 @@ export default function StudioSearch({ groups }: { groups: StudioGroup[] }) {
                 )}
                 {t.launch_date && <div className="text-xs text-neutral-400">런칭 {t.launch_date}</div>}
               </Link>
+              </div>
             ))}
           </div>
         </section>

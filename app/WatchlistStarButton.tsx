@@ -9,10 +9,13 @@ export default function WatchlistStarButton({
   titleId,
   currentUser,
   initialWatchlisted,
+  className,
 }: {
   titleId: number;
   currentUser: string | null;
   initialWatchlisted: boolean;
+  /** 그리드 카드 썸네일 위 오버레이 배치 등 기본 레이아웃과 다르게 배치할 때 덮어씀 */
+  className?: string;
 }) {
   const [userName, setUserName] = useState(currentUser);
   const [watchlisted, setWatchlisted] = useState(initialWatchlisted);
@@ -52,7 +55,7 @@ export default function WatchlistStarButton({
       title={watchlisted ? "관심작품에서 제거" : "관심작품에 추가"}
       className={`shrink-0 rounded px-1.5 py-0.5 text-base ${
         watchlisted ? "text-amber-500 hover:text-amber-600" : "text-neutral-300 hover:text-neutral-400"
-      }`}
+      } ${className ?? ""}`}
     >
       {watchlisted ? "★" : "☆"}
     </button>

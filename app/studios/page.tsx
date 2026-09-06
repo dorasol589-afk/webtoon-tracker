@@ -1,4 +1,6 @@
-import { getTitlesByStudio } from "@/lib/queries";
+import { cookies } from "next/headers";
+import { getTitlesByStudio, getWatchlist } from "@/lib/queries";
+import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
 import StudioSearch from "./StudioSearch";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +13,10 @@ export default async function StudiosPage() {
   } catch {
     loadError = true;
   }
+
+  const cookieStore = await cookies();
+  const watchlistUser = cookieStore.get(WATCHLIST_USER_COOKIE)?.value ?? null;
+  const watchlistedTitleIds = watchlistUser ? (await getWatchlist(watchlistUser)).map((e) => e.titleId) : [];
 
   return (
     <div>
@@ -36,7 +42,9 @@ export default async function StudiosPage() {
         </div>
       )}
 
-      {!loadError && <StudioSearch groups={groups} />}
+      {!loadError && (
+        <StudioSearch groups={groups} watchlistUser={watchlistUser} watchlistedTitleIds={watchlistedTitleIds} />
+      )}
     </div>
   );
 }

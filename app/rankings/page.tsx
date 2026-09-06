@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import {
   unifiedSearch,
   getWeekdayPopularityRanking,
@@ -7,6 +8,7 @@ import {
   getTitlesLaunchedThisWeek,
   getTitlesNeedingStudioFix,
   getTopTitlesByDownload,
+  getWatchlist,
   type UnifiedSearchResult,
   type PopularityRankRow,
   type Weekday,
@@ -17,8 +19,10 @@ import {
   type StudioFixRow,
   type DownloadRankRow,
 } from "@/lib/queries";
+import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
 import TagStatsChart from "@/app/TagStatsChart";
 import StudioNameEditor from "@/app/StudioNameEditor";
+import WatchlistStarButton from "@/app/WatchlistStarButton";
 import { NovelOriginBadge, NaverPerfLine, KakaoPerfLine, NaverStatStack, KakaoStatStack } from "@/app/PerfBadges";
 import { hasAdminAccess } from "@/lib/supabase";
 
@@ -138,6 +142,10 @@ export default async function RankingsPage({
   const result = await loadData(q, weekday, gender);
   const readOnly = !hasAdminAccess();
 
+  const cookieStore = await cookies();
+  const watchlistUser = cookieStore.get(WATCHLIST_USER_COOKIE)?.value ?? null;
+  const watchlistedIds = new Set(watchlistUser ? (await getWatchlist(watchlistUser)).map((e) => e.titleId) : []);
+
   return (
     <div>
       <form className="mb-6" action="/rankings">
@@ -163,10 +171,10 @@ export default async function RankingsPage({
             <li className="p-4 text-sm text-neutral-500">&quot;{q}&quot;에 대한 검색 결과가 없습니다.</li>
           )}
           {result.results.map((r) => (
-            <li key={`${r.platform}-${r.id}`}>
+            <li key={`${r.platform}-${r.id}`} className="flex items-center gap-2 pr-3 hover:bg-neutral-50">
               <Link
                 href={r.platform === "kakao" ? `/kakao/webtoon/${r.id}` : `/webtoon/${r.id}`}
-                className="flex items-center gap-3 p-3 hover:bg-neutral-50"
+                className="flex min-w-0 flex-1 items-center gap-3 p-3"
               >
                 {r.thumbnailUrl && (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -212,6 +220,13 @@ export default async function RankingsPage({
                   )}
                 </div>
               </Link>
+              {r.platform === "naver" && (
+                <WatchlistStarButton
+                  titleId={r.id}
+                  currentUser={watchlistUser}
+                  initialWatchlisted={watchlistedIds.has(r.id)}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -227,7 +242,13 @@ export default async function RankingsPage({
               </h2>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
                 {result.thisWeekLaunches.map((t) => (
-                  <div key={t.title_id} className="rounded-lg border border-neutral-200 bg-white p-2">
+                  <div key={t.title_id} className="relative rounded-lg border border-neutral-200 bg-white p-2">
+                    <WatchlistStarButton
+                      titleId={t.title_id}
+                      currentUser={watchlistUser}
+                      initialWatchlisted={watchlistedIds.has(t.title_id)}
+                      className="absolute right-1 top-1 rounded-full bg-white/90 shadow-sm"
+                    />
                     <Link href={`/webtoon/${t.title_id}`}>
                       {t.thumbnail_url && (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -267,7 +288,13 @@ export default async function RankingsPage({
               </h2>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
                 {result.studioFixNeeded.map((t) => (
-                  <div key={t.title_id} className="rounded-lg border border-neutral-200 bg-white p-2">
+                  <div key={t.title_id} className="relative rounded-lg border border-neutral-200 bg-white p-2">
+                    <WatchlistStarButton
+                      titleId={t.title_id}
+                      currentUser={watchlistUser}
+                      initialWatchlisted={watchlistedIds.has(t.title_id)}
+                      className="absolute right-1 top-1 rounded-full bg-white/90 shadow-sm"
+                    />
                     <Link href={`/webtoon/${t.title_id}`}>
                       {t.thumbnail_url && (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -324,10 +351,10 @@ export default async function RankingsPage({
                   <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
                 )}
                 {result.realtimeRanking.map((r) => (
-                  <li key={r.title_id}>
+                  <li key={r.title_id} className="flex items-center gap-1 pr-2 hover:bg-neutral-50">
                     <Link
                       href={`/webtoon/${r.title_id}`}
-                      className="flex items-center gap-3 p-2.5 hover:bg-neutral-50"
+                      className="flex min-w-0 flex-1 items-center gap-3 p-2.5"
                     >
                       <span className="w-5 shrink-0 text-center text-xs text-neutral-400">{r.rank}</span>
                       {r.thumbnail_url && (
@@ -355,6 +382,11 @@ export default async function RankingsPage({
                         />
                       </span>
                     </Link>
+                    <WatchlistStarButton
+                      titleId={r.title_id}
+                      currentUser={watchlistUser}
+                      initialWatchlisted={watchlistedIds.has(r.title_id)}
+                    />
                   </li>
                 ))}
               </ol>
@@ -384,10 +416,10 @@ export default async function RankingsPage({
                   <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
                 )}
                 {result.weekdayRanking.map((r) => (
-                  <li key={r.title_id}>
+                  <li key={r.title_id} className="flex items-center gap-1 pr-2 hover:bg-neutral-50">
                     <Link
                       href={`/webtoon/${r.title_id}`}
-                      className="flex items-center gap-3 p-2.5 hover:bg-neutral-50"
+                      className="flex min-w-0 flex-1 items-center gap-3 p-2.5"
                     >
                       <span className="w-5 shrink-0 text-center text-xs text-neutral-400">
                         {r.popularity_rank}
@@ -417,6 +449,11 @@ export default async function RankingsPage({
                         />
                       </span>
                     </Link>
+                    <WatchlistStarButton
+                      titleId={r.title_id}
+                      currentUser={watchlistUser}
+                      initialWatchlisted={watchlistedIds.has(r.title_id)}
+                    />
                   </li>
                 ))}
               </ol>
@@ -429,10 +466,10 @@ export default async function RankingsPage({
                   <li className="p-4 text-sm text-neutral-500">데이터 없음</li>
                 )}
                 {result.newReleaseRanking.map((r) => (
-                  <li key={r.title_id}>
+                  <li key={r.title_id} className="flex items-center gap-1 pr-2 hover:bg-neutral-50">
                     <Link
                       href={`/webtoon/${r.title_id}`}
-                      className="flex items-center gap-3 p-2.5 hover:bg-neutral-50"
+                      className="flex min-w-0 flex-1 items-center gap-3 p-2.5"
                     >
                       <span className="w-5 shrink-0 text-center text-xs text-neutral-400">{r.rank}</span>
                       {r.thumbnail_url && (
@@ -460,6 +497,11 @@ export default async function RankingsPage({
                         />
                       </span>
                     </Link>
+                    <WatchlistStarButton
+                      titleId={r.title_id}
+                      currentUser={watchlistUser}
+                      initialWatchlisted={watchlistedIds.has(r.title_id)}
+                    />
                   </li>
                 ))}
               </ol>
@@ -508,6 +550,11 @@ export default async function RankingsPage({
                       />
                     </span>
                   </Link>
+                  <WatchlistStarButton
+                    titleId={t.title_id}
+                    currentUser={watchlistUser}
+                    initialWatchlisted={watchlistedIds.has(t.title_id)}
+                  />
                 </li>
               ))}
             </ol>

@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getStudioTitles, getStudioJobPostings, getStudioRecruitLinkInfo } from "@/lib/queries";
+import { cookies } from "next/headers";
+import { getStudioTitles, getStudioJobPostings, getStudioRecruitLinkInfo, getWatchlist } from "@/lib/queries";
+import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
 import { hasAdminAccess } from "@/lib/supabase";
 import ApplyToggle from "@/app/recruit/ApplyToggle";
 import StarToggle from "@/app/recruit/StarToggle";
+import WatchlistStarButton from "@/app/WatchlistStarButton";
 import { formatManwon } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +46,10 @@ export default async function StudioDetailPage({
     getStudioRecruitLinkInfo(studioName),
   ]);
   if (!studio) notFound();
+
+  const cookieStore = await cookies();
+  const watchlistUser = cookieStore.get(WATCHLIST_USER_COOKIE)?.value ?? null;
+  const watchlistedIds = new Set(watchlistUser ? (await getWatchlist(watchlistUser)).map((e) => e.titleId) : []);
 
   const activePostings = postings.filter((p) => p.status === "ACTIVE");
   const closedPostings = postings.filter((p) => p.status === "CLOSED");
@@ -109,11 +116,19 @@ export default async function StudioDetailPage({
       {selectedTab === "titles" && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {studio.titles.map((t) => (
-            <Link
-              key={`${t.platform}-${t.id}`}
-              href={t.platform === "kakao" ? `/kakao/webtoon/${t.id}` : `/webtoon/${t.id}`}
-              className="rounded-lg border border-neutral-200 bg-white p-2 hover:bg-neutral-50"
-            >
+            <div key={`${t.platform}-${t.id}`} className="relative">
+              {t.platform === "naver" && (
+                <WatchlistStarButton
+                  titleId={t.id}
+                  currentUser={watchlistUser}
+                  initialWatchlisted={watchlistedIds.has(t.id)}
+                  className="absolute right-1 top-1 rounded-full bg-white/90 shadow-sm"
+                />
+              )}
+              <Link
+                href={t.platform === "kakao" ? `/kakao/webtoon/${t.id}` : `/webtoon/${t.id}`}
+                className="block rounded-lg border border-neutral-200 bg-white p-2 hover:bg-neutral-50"
+              >
               {t.thumbnail_url && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -149,7 +164,8 @@ export default async function StudioDetailPage({
                 <div className="text-xs text-neutral-500">댓글 {t.total_comment_count.toLocaleString()}</div>
               )}
               {t.launch_date && <div className="text-xs text-neutral-400">런칭 {t.launch_date}</div>}
-            </Link>
+              </Link>
+            </div>
           ))}
         </div>
       )}
