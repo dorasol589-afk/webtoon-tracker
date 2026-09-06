@@ -141,6 +141,25 @@ function reaggregatePoints(points: { snapshot_date: string; value: number }[], g
   return aggregated.map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count }));
 }
 
+function GranularityToggle({ value, onChange }: { value: Granularity; onChange: (g: Granularity) => void }) {
+  return (
+    <>
+      {GRANULARITY_OPTIONS.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          className={`rounded px-2 py-1 text-xs ${
+            value === opt.value ? "bg-neutral-800 text-white" : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </>
+  );
+}
+
 export function DownloadComparisonChart({ series }: { series: ComparisonSeries[] }) {
   const [granularity, setGranularity] = useState<Granularity>("day");
   const adjustedSeries = useMemo(
@@ -154,18 +173,45 @@ export function DownloadComparisonChart({ series }: { series: ComparisonSeries[]
     <ComparisonChart
       series={adjustedSeries}
       xLabelFormatter={xLabelFormatter}
-      headerControls={GRANULARITY_OPTIONS.map((opt) => (
-        <button
-          key={opt.value}
-          type="button"
-          onClick={() => setGranularity(opt.value)}
-          className={`rounded px-2 py-1 text-xs ${
-            granularity === opt.value ? "bg-neutral-800 text-white" : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
+      headerControls={<GranularityToggle value={granularity} onChange={setGranularity} />}
+    />
+  );
+}
+
+/** 시작 시점 값을 0%로 놓고 이후 변화율로 환산 - 작품마다 다운로드수 규모 차이가 커서
+ * 원값 라인차트로는 규모가 작은 작품의 추세가 거의 보이지 않는 문제를 해결하기 위함.
+ * 시작값이 0이면(수집 시작 시점에 다운로드수가 0) 나눗셈이 무의미해 그 작품은 제외한다. */
+function toGrowthPercent(points: { snapshot_date: string; value: number }[]) {
+  if (points.length === 0) return [];
+  const base = points[0].value;
+  if (!base) return [];
+  return points.map((p) => ({ snapshot_date: p.snapshot_date, value: ((p.value - base) / base) * 100 }));
+}
+
+function formatGrowthPercent(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded > 0 ? "+" : ""}${rounded.toLocaleString()}%`;
+}
+
+export function GrowthRateComparisonChart({ series }: { series: ComparisonSeries[] }) {
+  const [granularity, setGranularity] = useState<Granularity>("day");
+  const adjustedSeries = useMemo(
+    () =>
+      series.map((s) => ({
+        ...s,
+        points: toGrowthPercent(reaggregatePoints(s.points, granularity)),
+      })),
+    [series, granularity]
+  );
+  const xLabelFormatter =
+    granularity === "week" ? formatCalendarWeekLabel : granularity === "month" ? formatMonthLabel : (d: string) => d;
+
+  return (
+    <ComparisonChart
+      series={adjustedSeries}
+      valueFormatter={formatGrowthPercent}
+      xLabelFormatter={xLabelFormatter}
+      headerControls={<GranularityToggle value={granularity} onChange={setGranularity} />}
     />
   );
 }
