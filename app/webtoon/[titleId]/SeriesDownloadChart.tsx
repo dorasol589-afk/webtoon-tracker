@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import type { SeriesSnapshotPoint } from "@/lib/queries";
-import { aggregateSeries, getAnchorWeekday, type Granularity } from "./seriesTrendUtils";
+import { aggregateSeries, getAnchorWeekday, type Granularity } from "@/lib/seriesTrend";
 
 const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
   { value: "day", label: "일별" },

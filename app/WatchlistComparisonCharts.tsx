@@ -1,6 +1,7 @@
 "use client";
 
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { formatWon } from "@/lib/format";
 
 export interface ComparisonSeries {
   titleId: number;
@@ -23,7 +24,13 @@ function mergeSeries(seriesList: ComparisonSeries[]) {
   });
 }
 
-function ComparisonChart({ series }: { series: ComparisonSeries[] }) {
+function ComparisonChart({
+  series,
+  valueFormatter = (v) => v.toLocaleString(),
+}: {
+  series: ComparisonSeries[];
+  valueFormatter?: (value: number) => string;
+}) {
   const withData = series.filter((s) => s.points.length > 0);
   if (withData.length === 0) {
     return (
@@ -40,8 +47,8 @@ function ComparisonChart({ series }: { series: ComparisonSeries[] }) {
           <LineChart data={chartData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
             <XAxis dataKey="snapshot_date" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} width={60} />
-            <Tooltip formatter={(value) => [value == null ? "-" : Number(value).toLocaleString(), ""]} />
+            <YAxis tick={{ fontSize: 12 }} width={60} tickFormatter={(v) => valueFormatter(Number(v))} />
+            <Tooltip formatter={(value) => [value == null ? "-" : valueFormatter(Number(value)), ""]} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {withData.map((s, i) => (
               <Line
@@ -68,4 +75,8 @@ export function CommentComparisonChart({ series }: { series: ComparisonSeries[] 
 
 export function DownloadComparisonChart({ series }: { series: ComparisonSeries[] }) {
   return <ComparisonChart series={series} />;
+}
+
+export function RevenueComparisonChart({ series }: { series: ComparisonSeries[] }) {
+  return <ComparisonChart series={series} valueFormatter={formatWon} />;
 }

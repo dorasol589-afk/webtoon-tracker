@@ -8,10 +8,17 @@ import {
   getDownloadHistoryByTitleId,
 } from "@/lib/queries";
 import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
+import { aggregateSeries, getAnchorWeekday, toDeltaSeries } from "@/lib/seriesTrend";
 import { NovelOriginBadge, NaverStatStack } from "@/app/PerfBadges";
 import NicknameSwitcher from "@/app/NicknameSwitcher";
 import WatchlistRemoveButton from "@/app/WatchlistRemoveButton";
-import { CommentComparisonChart, DownloadComparisonChart } from "@/app/WatchlistComparisonCharts";
+import {
+  CommentComparisonChart,
+  DownloadComparisonChart,
+  RevenueComparisonChart,
+} from "@/app/WatchlistComparisonCharts";
+
+const PRICE_PER_DOWNLOAD = 300;
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +80,15 @@ async function WatchlistBody({ userName }: { userName: string }) {
     titleName: titleBasics.get(id)?.title_name ?? `#${id}`,
     points: downloadHistories[i].map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count })),
   }));
+  const revenueSeries = titleIds.map((id, i) => {
+    const anchorWeekday = getAnchorWeekday(perfMap.get(id)?.weekday);
+    const weekly = aggregateSeries(downloadHistories[i], "week", anchorWeekday);
+    return {
+      titleId: id,
+      titleName: titleBasics.get(id)?.title_name ?? `#${id}`,
+      points: toDeltaSeries(weekly).map((p) => ({ snapshot_date: p.snapshot_date, value: p.delta * PRICE_PER_DOWNLOAD })),
+    };
+  });
 
   return (
     <div>
@@ -123,6 +139,13 @@ async function WatchlistBody({ userName }: { userName: string }) {
       <section className="mt-8">
         <h2 className="mb-3 text-sm font-semibold text-neutral-500">다운로드수 비교</h2>
         <DownloadComparisonChart series={downloadSeries} />
+      </section>
+
+      <section className="mt-8">
+        <h2 className="mb-3 text-sm font-semibold text-neutral-500">
+          매출액 비교 <span className="text-xs font-normal text-neutral-400">(주간 다운로드 변동수 × 300원 추정치)</span>
+        </h2>
+        <RevenueComparisonChart series={revenueSeries} />
       </section>
     </div>
   );
