@@ -8,7 +8,7 @@ import {
   getDownloadHistoryByTitleId,
 } from "@/lib/queries";
 import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
-import { aggregateSeries, getAnchorWeekday, toDeltaSeries } from "@/lib/seriesTrend";
+import { aggregateByCalendarWeek, toDeltaSeries } from "@/lib/seriesTrend";
 import { NovelOriginBadge, NaverStatStack } from "@/app/PerfBadges";
 import NicknameSwitcher from "@/app/NicknameSwitcher";
 import WatchlistRemoveButton from "@/app/WatchlistRemoveButton";
@@ -81,8 +81,7 @@ async function WatchlistBody({ userName }: { userName: string }) {
     points: downloadHistories[i].map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count })),
   }));
   const revenueSeries = titleIds.map((id, i) => {
-    const anchorWeekday = getAnchorWeekday(perfMap.get(id)?.weekday);
-    const weekly = aggregateSeries(downloadHistories[i], "week", anchorWeekday);
+    const weekly = aggregateByCalendarWeek(downloadHistories[i]);
     return {
       titleId: id,
       titleName: titleBasics.get(id)?.title_name ?? `#${id}`,
@@ -92,44 +91,43 @@ async function WatchlistBody({ userName }: { userName: string }) {
 
   return (
     <div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+      <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
         {titleIds.map((id) => {
           const basic = titleBasics.get(id);
           const perf = perfMap.get(id);
           return (
-            <div key={id} className="rounded-lg border border-neutral-200 bg-white p-2">
-              <Link href={`/webtoon/${id}`}>
+            <li key={id} className="flex items-center gap-2 pr-3 hover:bg-neutral-50">
+              <Link href={`/webtoon/${id}`} className="flex min-w-0 flex-1 items-center gap-3 p-3">
                 {basic?.thumbnail_url && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={basic.thumbnail_url}
                     alt=""
-                    width={112}
-                    height={145}
-                    loading="lazy"
-                    className="mb-2 h-auto w-full rounded"
+                    width={56}
+                    height={72}
+                    className="h-auto w-14 shrink-0 rounded"
                   />
                 )}
-                <div className="flex items-center gap-1">
-                  <div className="truncate text-sm font-medium hover:underline">
-                    {basic?.title_name ?? `#${id}`}
-                  </div>
-                  {basic?.is_novel_origin && <NovelOriginBadge />}
-                </div>
+                <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-1 text-sm font-medium">
+                    <span className="truncate">{basic?.title_name ?? `#${id}`}</span>
+                    {basic?.is_novel_origin && <NovelOriginBadge />}
+                  </span>
+                  <NaverStatStack
+                    starScore={perf?.star_score ?? null}
+                    launchDate={perf?.launch_date ?? null}
+                    weekday={perf?.weekday ?? null}
+                    popularityRank={perf?.popularity_rank ?? null}
+                    downloadCount={perf?.download_count ?? null}
+                    totalCommentCount={perf?.total_comment_count ?? null}
+                  />
+                </span>
               </Link>
-              <NaverStatStack
-                starScore={perf?.star_score ?? null}
-                launchDate={perf?.launch_date ?? null}
-                weekday={perf?.weekday ?? null}
-                popularityRank={perf?.popularity_rank ?? null}
-                downloadCount={perf?.download_count ?? null}
-                totalCommentCount={perf?.total_comment_count ?? null}
-              />
               <WatchlistRemoveButton userName={userName} titleId={id} />
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ul>
 
       <section className="mt-8">
         <h2 className="mb-3 text-sm font-semibold text-neutral-500">댓글수 비교</h2>

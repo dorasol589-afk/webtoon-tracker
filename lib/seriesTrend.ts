@@ -85,6 +85,42 @@ export function aggregateSeries(
   return aggregateByMonth(data);
 }
 
+// 그 날짜가 속한 주(월요일 시작)의 월요일 날짜를 반환.
+function mondayOf(dateStr: string): string {
+  const date = toUTCDate(dateStr);
+  const day = date.getUTCDay(); // 0=일 ... 6=토
+  const diffToMonday = day === 0 ? 6 : day - 1;
+  date.setUTCDate(date.getUTCDate() - diffToMonday);
+  return date.toISOString().slice(0, 10);
+}
+
+/** "2026-08-17"(주의 월요일 날짜) 같은 값을 "8월 3주차" 형태로 표기. 여러 작품을 비교할 때
+ * 쓰는 라벨이라 정확한 ISO 주차가 아니라 "그 달의 몇 번째 월요일 주"인지 정도의 직관적 표기다. */
+export function formatCalendarWeekLabel(dateStr: string): string {
+  const monday = mondayOf(dateStr);
+  const [, m, d] = monday.split("-").map(Number);
+  const weekOfMonth = Math.ceil(d / 7);
+  return `${m}월 ${weekOfMonth}주차`;
+}
+
+/** 작품마다 연재 요일이 달라 aggregateSeries("week", ...)의 체크포인트가 서로 다른 날짜로
+ * 어긋나는 문제를, 달력 기준 주(월요일 시작)로 통일해서 해결한다 - 여러 작품을 같은 시점끼리
+ * 비교해야 하는 관심작품 비교 탭에서만 씀(개별 작품 페이지는 연재 요일 기준이 더 자연스러워 그대로 둠).
+ * 결과의 snapshot_date는 그 주의 월요일 날짜(정렬/병합용 키)이고, 값은 그 주에 관측된 마지막 누적값이다. */
+export function aggregateByCalendarWeek(data: SeriesSnapshotPoint[]): SeriesSnapshotPoint[] {
+  const groups = new Map<string, SeriesSnapshotPoint>();
+  for (const point of data) {
+    const week = mondayOf(point.snapshot_date);
+    const existing = groups.get(week);
+    if (!existing || point.snapshot_date > existing.snapshot_date) {
+      groups.set(week, point);
+    }
+  }
+  return Array.from(groups.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([week, point]) => ({ snapshot_date: week, download_count: point.download_count }));
+}
+
 export interface DeltaPoint {
   snapshot_date: string;
   delta: number;

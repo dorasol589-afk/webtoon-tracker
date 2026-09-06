@@ -19,9 +19,11 @@ export default function WatchlistRemoveButton({ userName, titleId }: { userName:
         });
       }}
       disabled={isPending}
-      className="mt-1 w-full rounded bg-neutral-100 px-1.5 py-1 text-[11px] text-neutral-500 hover:bg-rose-100 hover:text-rose-600"
+      title="관심작품에서 제거"
+      aria-label="관심작품에서 제거"
+      className="shrink-0 rounded px-1.5 py-0.5 text-base text-neutral-300 hover:text-rose-500"
     >
-      관심작품에서 제거
+      ✕
     </button>
   );
 }
