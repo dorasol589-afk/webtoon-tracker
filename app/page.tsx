@@ -16,7 +16,6 @@ import WatchlistRemoveButton from "@/app/WatchlistRemoveButton";
 import {
   CommentComparisonChart,
   DownloadComparisonChart,
-  GrowthRateComparisonChart,
   RevenueComparisonChart,
 } from "@/app/WatchlistComparisonCharts";
 
@@ -141,14 +140,6 @@ async function WatchlistBody({ userName }: { userName: string }) {
       <section className="mt-8">
         <h2 className="mb-3 text-sm font-semibold text-neutral-500">댓글수 비교</h2>
         <CommentComparisonChart series={commentSeries} />
-      </section>
-
-      <section className="mt-8">
-        <h2 className="mb-3 text-sm font-semibold text-neutral-500">
-          다운로드수 증감률 비교{" "}
-          <span className="text-xs font-normal text-neutral-400">(작품마다 규모 차이가 커서 시작 시점 대비 변화율로 비교)</span>
-        </h2>
-        <GrowthRateComparisonChart series={downloadSeries} />
       </section>
 
       <section className="mt-8">
