@@ -1,6 +1,18 @@
 "use client";
 
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  LabelList,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 import { formatWon } from "@/lib/format";
 import { formatCalendarWeekLabel } from "@/lib/seriesTrend";
 
@@ -50,18 +62,27 @@ function ComparisonChart({
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
       <div className="h-80 w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <ChartComponent data={chartData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+          <ChartComponent data={chartData} margin={{ top: variant === "bar" ? 24 : 10, right: 20, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
             <XAxis dataKey="snapshot_date" tick={{ fontSize: 12 }} tickFormatter={xLabelFormatter} />
             <YAxis tick={{ fontSize: 12 }} width={60} tickFormatter={(v) => valueFormatter(Number(v))} />
             <Tooltip
+              position={variant === "bar" ? { y: 0 } : undefined}
               labelFormatter={(label) => xLabelFormatter(String(label))}
               formatter={(value) => [value == null ? "-" : valueFormatter(Number(value)), ""]}
             />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             {withData.map((s, i) =>
               variant === "bar" ? (
-                <Bar key={s.titleId} dataKey={String(s.titleId)} name={s.titleName} fill={COLORS[i % COLORS.length]} />
+                <Bar key={s.titleId} dataKey={String(s.titleId)} name={s.titleName} fill={COLORS[i % COLORS.length]}>
+                  <LabelList
+                    dataKey={String(s.titleId)}
+                    position="top"
+                    fontSize={9}
+                    fill={COLORS[i % COLORS.length]}
+                    formatter={(v) => (v == null ? "" : Math.round(Number(v) / 10000).toLocaleString())}
+                  />
+                </Bar>
               ) : (
                 <Line
                   key={s.titleId}
