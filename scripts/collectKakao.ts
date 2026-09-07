@@ -18,6 +18,7 @@ import {
   fetchTitleProfile,
   fetchViewsAndLikes,
   fetchAllEpisodes,
+  fetchTotalCommentCount,
   type KakaoCardContent,
 } from "../lib/kakao";
 
@@ -86,10 +87,11 @@ async function collectTitleDetail(
   card: KakaoCardContent,
   snapshotDate: string
 ): Promise<boolean> {
-  const [profileResult, statsResult, episodesResult] = await Promise.allSettled([
+  const [profileResult, statsResult, episodesResult, commentCountResult] = await Promise.allSettled([
     fetchTitleProfile(card.id),
     fetchViewsAndLikes(card.seoId, card.id),
     fetchAllEpisodes(card.id),
+    fetchTotalCommentCount(card.id),
   ]);
 
   if (profileResult.status === "fulfilled") {
@@ -117,20 +119,13 @@ async function collectTitleDetail(
     console.error(`  프로필 조회 실패 (contentId=${card.id}, ${card.title}):`, profileResult.reason);
   }
 
+  // view/like수와 총 댓글수는 서로 다른 API라 하나가 실패해도 성공한 쪽만 반영되도록
+  // (실패한 필드를 null로 덮어써서 기존 값을 지우는 일이 없도록) 성공한 필드만 모아서 upsert한다.
+  const snapshotPatch: { view_count?: number; like_count?: number; total_comment_count?: number } = {};
   if (statsResult.status === "fulfilled") {
     const stats = statsResult.value;
-    if (stats.viewCount !== null || stats.likeCount !== null) {
-      const { error } = await supabase.from("kakao_stat_snapshots").upsert(
-        {
-          content_id: card.id,
-          snapshot_date: snapshotDate,
-          view_count: stats.viewCount,
-          like_count: stats.likeCount,
-        },
-        { onConflict: "content_id,snapshot_date" }
-      );
-      if (error) console.error(`  kakao_stat_snapshots upsert 실패 (${card.title}):`, error.message);
-    }
+    if (stats.viewCount !== null) snapshotPatch.view_count = stats.viewCount;
+    if (stats.likeCount !== null) snapshotPatch.like_count = stats.likeCount;
     if (stats.coverImageUrl) {
       const { error } = await supabase
         .from("kakao_titles")
@@ -140,6 +135,19 @@ async function collectTitleDetail(
     }
   } else {
     console.error(`  조회수/좋아요수 조회 실패 (contentId=${card.id}, ${card.title}):`, statsResult.reason);
+  }
+
+  if (commentCountResult.status === "fulfilled") {
+    snapshotPatch.total_comment_count = commentCountResult.value;
+  } else {
+    console.error(`  총 댓글수 조회 실패 (contentId=${card.id}, ${card.title}):`, commentCountResult.reason);
+  }
+
+  if (Object.keys(snapshotPatch).length > 0) {
+    const { error } = await supabase
+      .from("kakao_stat_snapshots")
+      .upsert({ content_id: card.id, snapshot_date: snapshotDate, ...snapshotPatch }, { onConflict: "content_id,snapshot_date" });
+    if (error) console.error(`  kakao_stat_snapshots upsert 실패 (${card.title}):`, error.message);
   }
 
   if (episodesResult.status === "fulfilled") {
@@ -162,7 +170,12 @@ async function collectTitleDetail(
     console.error(`  회차목록 조회 실패 (contentId=${card.id}, ${card.title}):`, episodesResult.reason);
   }
 
-  return profileResult.status === "fulfilled" || statsResult.status === "fulfilled" || episodesResult.status === "fulfilled";
+  return (
+    profileResult.status === "fulfilled" ||
+    statsResult.status === "fulfilled" ||
+    episodesResult.status === "fulfilled" ||
+    commentCountResult.status === "fulfilled"
+  );
 }
 
 async function main() {
@@ -227,8 +240,13 @@ async function main() {
       titles.slice(0, 5).map((card) =>
         sampleLimit(async () => {
           try {
-            const stats = await fetchViewsAndLikes(card.seoId, card.id);
-            console.log(`    ${card.title} - 조회수 ${stats.viewCount}, 좋아요 ${stats.likeCount}`);
+            const [stats, totalCommentCount] = await Promise.all([
+              fetchViewsAndLikes(card.seoId, card.id),
+              fetchTotalCommentCount(card.id),
+            ]);
+            console.log(
+              `    ${card.title} - 조회수 ${stats.viewCount}, 좋아요 ${stats.likeCount}, 총 댓글수 ${totalCommentCount}`
+            );
           } catch (err) {
             console.error(`    조회 실패 (${card.title}):`, err);
           }

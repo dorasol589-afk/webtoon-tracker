@@ -13,13 +13,18 @@ const COMMON_HEADERS = {
 export const KAKAO_WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type KakaoWeekday = (typeof KAKAO_WEEKDAYS)[number];
 
-async function fetchJsonWithRetry<T>(url: string, retries = 2, timeoutMs = 10000): Promise<T> {
+async function fetchJsonWithRetry<T>(
+  url: string,
+  retries = 2,
+  timeoutMs = 10000,
+  extraHeaders?: Record<string, string>
+): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { headers: COMMON_HEADERS, signal: controller.signal });
+      const res = await fetch(url, { headers: { ...COMMON_HEADERS, ...extraHeaders }, signal: controller.signal });
       clearTimeout(timer);
       if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
       return (await res.json()) as T;
@@ -345,5 +350,28 @@ export async function fetchAllEpisodes(contentId: number): Promise<KakaoEpisodeL
     if (episodes.length < pageSize) break;
   }
   return all;
+}
+
+interface CommentsResponse {
+  meta: {
+    pagination: {
+      totalCount: number;
+    };
+  };
+}
+
+/**
+ * 작품 전체(회차 구분 없이 relationType=CONTENT)의 총 댓글수. meta.pagination.totalCount에 들어있다.
+ * 이 댓글 API만 다른 gateway-kw 엔드포인트와 달리 Accept-Language 헤더가 없으면 LANGUAGE_MISMATCH로
+ * 막히는데, 정확히 "ko" 하나만 주면 통과한다(ko-KR, ko-KR;q=0.9 등은 안 됨 - 실제 테스트로 확인).
+ */
+export async function fetchTotalCommentCount(contentId: number): Promise<number> {
+  const res = await fetchJsonWithRetry<CommentsResponse>(
+    `https://gateway-kw.kakao.com/comment/v1/comments?relationType=CONTENT&relationId=${contentId}&sort=-LIKE&offset=0&limit=1`,
+    2,
+    10000,
+    { "Accept-Language": "ko" }
+  );
+  return res.meta.pagination.totalCount;
 }
 

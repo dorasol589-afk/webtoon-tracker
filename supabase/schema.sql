@@ -1324,6 +1324,11 @@ create table if not exists kakao_stat_snapshots (
 
 create index if not exists idx_kakao_stat_snapshots_date on kakao_stat_snapshots (snapshot_date);
 
+-- 작품 전체 총 댓글수(회차 구분 없음, relationType=CONTENT). 댓글 API는 Accept-Language: ko
+-- 헤더가 정확히 있어야만 통과되는(다른 값은 LANGUAGE_MISMATCH로 막힘) 걸 확인해서 수집 대상에
+-- 추가함 - lib/kakao.ts의 fetchTotalCommentCount 참고.
+alter table kakao_stat_snapshots add column if not exists total_comment_count bigint;
+
 -- 요일별 인기순위(timetables 응답의 sorting 필드)는 시도해봤으나 세션 상태에 따라 값이 들쭉날쭉
 -- 빠지는 걸 확인해(실제 브라우저에서도 재현됨) 신뢰할 수 없다고 판단, kakao_weekday_ranks 테이블 및
 -- 관련 함수는 만들지 않기로 함 - 이미 실행했다면 아래로 정리:
