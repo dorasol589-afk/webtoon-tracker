@@ -5,7 +5,6 @@ import { getStudioTitles, getStudioJobPostings, getStudioRecruitLinkInfo, getWat
 import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
 import { hasAdminAccess } from "@/lib/supabase";
 import ApplyToggle from "@/app/recruit/ApplyToggle";
-import StarToggle from "@/app/recruit/StarToggle";
 import WatchlistStarButton from "@/app/WatchlistStarButton";
 import { formatManwon } from "@/lib/format";
 
@@ -191,7 +190,6 @@ export default async function StudioDetailPage({
                 {activePostings.map((p, i) => (
                   <li key={i} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
                     <span className="flex min-w-0 items-center gap-2">
-                      <StarToggle source={p.source} postingId={p.postingId} initialStarred={p.starred} readOnly={readOnly} />
                       <a
                         href={p.url}
                         target="_blank"
@@ -221,7 +219,6 @@ export default async function StudioDetailPage({
                 {closedPostings.map((p, i) => (
                   <li key={i} className="flex items-center justify-between gap-3 px-4 py-3 text-sm text-neutral-400">
                     <span className="flex min-w-0 items-center gap-2">
-                      <StarToggle source={p.source} postingId={p.postingId} initialStarred={p.starred} readOnly={readOnly} />
                       <a href={p.url} target="_blank" rel="noopener noreferrer" className="truncate hover:underline">
                         {p.title}
                       </a>
