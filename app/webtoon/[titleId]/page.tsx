@@ -8,7 +8,6 @@ import {
   getSeriesProductForTitle,
   getSeriesHistory,
   getTitleNotes,
-  getTitlePrivateNote,
   getPopularityRankHistory,
   getNaverTitlesPerf,
   isTitleWatchlisted,
@@ -17,7 +16,6 @@ import SeriesDownloadChart from "./SeriesDownloadChart";
 import RevenueEstimateSection from "./RevenueEstimateSection";
 import PopularityRankChart from "./PopularityRankChart";
 import TitleNotesForm from "./TitleNotesForm";
-import PrivateNoteForm from "./PrivateNoteForm";
 import StudioNameEditor from "@/app/StudioNameEditor";
 import WatchlistToggle from "@/app/WatchlistToggle";
 import { hasAdminAccess } from "@/lib/supabase";
@@ -55,17 +53,15 @@ export default async function TitlePage({
   const cookieStore = await cookies();
   const watchlistUser = cookieStore.get(WATCHLIST_USER_COOKIE)?.value ?? null;
 
-  const [episodes, snapshot, seriesHistory, titleNotes, privateNote, rankHistory, perfMap, watchlisted] =
-    await Promise.all([
-      getEpisodesWithLatestCount(id),
-      getLatestTitleSnapshot(id),
-      seriesProduct ? getSeriesHistory(seriesProduct.productNo) : Promise.resolve([]),
-      getTitleNotes(id),
-      getTitlePrivateNote(id),
-      getPopularityRankHistory(id),
-      getNaverTitlesPerf([id]),
-      watchlistUser ? isTitleWatchlisted(watchlistUser, id) : Promise.resolve(false),
-    ]);
+  const [episodes, snapshot, seriesHistory, titleNotes, rankHistory, perfMap, watchlisted] = await Promise.all([
+    getEpisodesWithLatestCount(id),
+    getLatestTitleSnapshot(id),
+    seriesProduct ? getSeriesHistory(seriesProduct.productNo) : Promise.resolve([]),
+    getTitleNotes(id),
+    getPopularityRankHistory(id),
+    getNaverTitlesPerf([id]),
+    watchlistUser ? isTitleWatchlisted(watchlistUser, id) : Promise.resolve(false),
+  ]);
   const perf = perfMap.get(id);
 
   const selectedTab = tab === "stats" ? "stats" : "list";
@@ -188,12 +184,6 @@ export default async function TitlePage({
       <div className="mb-6">
         <TitleNotesForm titleId={id} initial={titleNotes} readOnly={readOnly} />
       </div>
-
-      {!readOnly && (
-        <div className="mb-6">
-          <PrivateNoteForm titleId={id} initial={privateNote} />
-        </div>
-      )}
 
       <div className="mb-4">
         <a
