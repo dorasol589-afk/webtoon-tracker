@@ -563,11 +563,11 @@ export default async function RankingsPage({
           <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
             <section>
               <h2 className="mb-3 text-sm font-semibold text-neutral-500">장르별 런칭 추이</h2>
-              <TagLaunchTrendChart tagType="GENRE" options={result.genreStats} color="#2563eb" />
+              <TagLaunchTrendChart tagType="GENRE" options={result.genreStats} />
             </section>
             <section>
               <h2 className="mb-3 text-sm font-semibold text-neutral-500">키워드별 런칭 추이</h2>
-              <TagLaunchTrendChart tagType="KEYWORD" options={result.keywordStats} color="#059669" />
+              <TagLaunchTrendChart tagType="KEYWORD" options={result.keywordStats} />
             </section>
           </div>
         </div>

@@ -1519,26 +1519,43 @@ export async function getTagStats(tagType: TagType, limit = 15): Promise<TagStat
   return (data ?? []) as TagStatRow[];
 }
 
-/** 특정 장르/키워드 태그가 붙은 작품들의 런칭일 목록 (연재/완결/휴재 상태 무관, 시간대별 런칭 추이 그래프용) */
-export async function getTagLaunchDates(tagType: TagType, tagName: string): Promise<string[]> {
+/** 여러 장르/키워드 태그가 붙은 작품들의 런칭일 목록을 한 번에 조회 (연재/완결/휴재 상태 무관,
+ * 태그별 런칭 추이를 한 그래프에 여러 선으로 겹쳐 보여줄 때 태그마다 API를 따로 호출하지 않도록) */
+export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[]): Promise<Record<string, string[]>> {
+  if (tagNames.length === 0) return {};
   const supabase = getSupabaseAnon();
   const { data: tagRows, error } = await supabase
     .from("title_tags")
-    .select("title_id")
+    .select("title_id,tag_name")
     .eq("tag_type", tagType)
-    .eq("tag_name", tagName);
+    .in("tag_name", tagNames);
   if (error) throw error;
-  const titleIds = [...new Set((tagRows ?? []).map((r) => r.title_id as number))];
-  if (titleIds.length === 0) return [];
+
+  const titleIdsByTag = new Map<string, Set<number>>();
+  const allTitleIds = new Set<number>();
+  for (const row of tagRows ?? []) {
+    const tagName = row.tag_name as string;
+    const titleId = row.title_id as number;
+    if (!titleIdsByTag.has(tagName)) titleIdsByTag.set(tagName, new Set());
+    titleIdsByTag.get(tagName)!.add(titleId);
+    allTitleIds.add(titleId);
+  }
 
   const perfMap = new Map<number, NaverTitlePerf>();
+  const idsArray = [...allTitleIds];
   const CHUNK_SIZE = 500;
-  for (let i = 0; i < titleIds.length; i += CHUNK_SIZE) {
-    const batch = titleIds.slice(i, i + CHUNK_SIZE);
+  for (let i = 0; i < idsArray.length; i += CHUNK_SIZE) {
+    const batch = idsArray.slice(i, i + CHUNK_SIZE);
     const batchMap = await getNaverTitlesPerf(batch);
     for (const [id, perf] of batchMap) perfMap.set(id, perf);
   }
-  return [...perfMap.values()].map((p) => p.launch_date).filter((d): d is string => !!d);
+
+  const result: Record<string, string[]> = {};
+  for (const tagName of tagNames) {
+    const ids = titleIdsByTag.get(tagName) ?? new Set<number>();
+    result[tagName] = [...ids].map((id) => perfMap.get(id)?.launch_date).filter((d): d is string => !!d);
+  }
+  return result;
 }
 
 /** 작품의 장르 태그 목록 (title_tags에 매일 수집기가 저장해둔 값) */
