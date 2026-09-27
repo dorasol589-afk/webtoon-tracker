@@ -20,7 +20,7 @@ import {
   type DownloadRankRow,
 } from "@/lib/queries";
 import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
-import TagStatsChart from "@/app/TagStatsChart";
+import TagLaunchTrendChart from "@/app/TagLaunchTrendChart";
 import StudioNameEditor from "@/app/StudioNameEditor";
 import WatchlistStarButton from "@/app/WatchlistStarButton";
 import { NovelOriginBadge, NaverPerfLine, KakaoPerfLine, NaverStatStack, KakaoStatStack } from "@/app/PerfBadges";
@@ -109,8 +109,8 @@ async function loadData(
       getRealtimeRankingLive(selectedGender),
       getWeekdayPopularityRanking(selectedWeekday, 5),
       getRealtimeRankingLive("TOTAL", "NEW"),
-      getTagStats("GENRE", 15),
-      getTagStats("KEYWORD", 15),
+      getTagStats("GENRE", 40),
+      getTagStats("KEYWORD", 40),
       getTitlesLaunchedThisWeek(),
       getTitlesNeedingStudioFix(),
       getTopTitlesByDownload(10),
@@ -562,16 +562,12 @@ export default async function RankingsPage({
 
           <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
             <section>
-              <h2 className="mb-3 text-sm font-semibold text-neutral-500">
-                장르별 통계 (연재중 작품 수 기준)
-              </h2>
-              <TagStatsChart data={result.genreStats} color="#2563eb" />
+              <h2 className="mb-3 text-sm font-semibold text-neutral-500">장르별 런칭 추이</h2>
+              <TagLaunchTrendChart tagType="GENRE" options={result.genreStats} color="#2563eb" />
             </section>
             <section>
-              <h2 className="mb-3 text-sm font-semibold text-neutral-500">
-                키워드별 통계 (연재중 작품 수 기준)
-              </h2>
-              <TagStatsChart data={result.keywordStats} color="#059669" />
+              <h2 className="mb-3 text-sm font-semibold text-neutral-500">키워드별 런칭 추이</h2>
+              <TagLaunchTrendChart tagType="KEYWORD" options={result.keywordStats} color="#059669" />
             </section>
           </div>
         </div>

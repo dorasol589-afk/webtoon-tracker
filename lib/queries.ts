@@ -1519,6 +1519,28 @@ export async function getTagStats(tagType: TagType, limit = 15): Promise<TagStat
   return (data ?? []) as TagStatRow[];
 }
 
+/** 특정 장르/키워드 태그가 붙은 작품들의 런칭일 목록 (연재/완결/휴재 상태 무관, 시간대별 런칭 추이 그래프용) */
+export async function getTagLaunchDates(tagType: TagType, tagName: string): Promise<string[]> {
+  const supabase = getSupabaseAnon();
+  const { data: tagRows, error } = await supabase
+    .from("title_tags")
+    .select("title_id")
+    .eq("tag_type", tagType)
+    .eq("tag_name", tagName);
+  if (error) throw error;
+  const titleIds = [...new Set((tagRows ?? []).map((r) => r.title_id as number))];
+  if (titleIds.length === 0) return [];
+
+  const perfMap = new Map<number, NaverTitlePerf>();
+  const CHUNK_SIZE = 500;
+  for (let i = 0; i < titleIds.length; i += CHUNK_SIZE) {
+    const batch = titleIds.slice(i, i + CHUNK_SIZE);
+    const batchMap = await getNaverTitlesPerf(batch);
+    for (const [id, perf] of batchMap) perfMap.set(id, perf);
+  }
+  return [...perfMap.values()].map((p) => p.launch_date).filter((d): d is string => !!d);
+}
+
 /** 작품의 장르 태그 목록 (title_tags에 매일 수집기가 저장해둔 값) */
 export async function getTitleGenres(titleId: number): Promise<string[]> {
   const supabase = getSupabaseAnon();
