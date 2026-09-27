@@ -4,7 +4,6 @@ import {
   unifiedSearch,
   getWeekdayPopularityRanking,
   getRealtimeRankingLive,
-  getTagStats,
   getTitlesLaunchedThisWeek,
   getTitlesNeedingStudioFix,
   getTopTitlesByDownload,
@@ -14,13 +13,11 @@ import {
   type Weekday,
   type RealtimeRankRow,
   type RealtimeRankCategory,
-  type TagStatRow,
   type TitleListRow,
   type StudioFixRow,
   type DownloadRankRow,
 } from "@/lib/queries";
 import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
-import TagLaunchTrendChart from "@/app/TagLaunchTrendChart";
 import StudioNameEditor from "@/app/StudioNameEditor";
 import WatchlistStarButton from "@/app/WatchlistStarButton";
 import { NovelOriginBadge, NaverPerfLine, KakaoPerfLine, NaverStatStack, KakaoStatStack } from "@/app/PerfBadges";
@@ -78,8 +75,6 @@ type LoadResult =
       weekdayRanking: PopularityRankRow[];
       selectedWeekday: Weekday;
       newReleaseRanking: RealtimeRankRow[];
-      genreStats: TagStatRow[];
-      keywordStats: TagStatRow[];
       thisWeekLaunches: TitleListRow[];
       studioFixNeeded: StudioFixRow[];
       downloadRanking: DownloadRankRow[];
@@ -96,25 +91,15 @@ async function loadData(
     }
     const selectedWeekday = weekdayParam && isWeekday(weekdayParam) ? weekdayParam : getTodayWeekdayKST();
     const selectedGender = genderParam && isGenderCategory(genderParam) ? genderParam : "TOTAL";
-    const [
-      realtimeRanking,
-      weekdayRanking,
-      newReleaseRanking,
-      genreStats,
-      keywordStats,
-      thisWeekLaunches,
-      studioFixNeeded,
-      downloadRanking,
-    ] = await Promise.all([
-      getRealtimeRankingLive(selectedGender),
-      getWeekdayPopularityRanking(selectedWeekday, 5),
-      getRealtimeRankingLive("TOTAL", "NEW"),
-      getTagStats("GENRE", 40),
-      getTagStats("KEYWORD", 500),
-      getTitlesLaunchedThisWeek(),
-      getTitlesNeedingStudioFix(),
-      getTopTitlesByDownload(10),
-    ]);
+    const [realtimeRanking, weekdayRanking, newReleaseRanking, thisWeekLaunches, studioFixNeeded, downloadRanking] =
+      await Promise.all([
+        getRealtimeRankingLive(selectedGender),
+        getWeekdayPopularityRanking(selectedWeekday, 5),
+        getRealtimeRankingLive("TOTAL", "NEW"),
+        getTitlesLaunchedThisWeek(),
+        getTitlesNeedingStudioFix(),
+        getTopTitlesByDownload(10),
+      ]);
     return {
       type: "rankings",
       realtimeRanking,
@@ -122,8 +107,6 @@ async function loadData(
       weekdayRanking,
       selectedWeekday,
       newReleaseRanking,
-      genreStats,
-      keywordStats,
       thisWeekLaunches,
       studioFixNeeded,
       downloadRanking,
@@ -559,17 +542,6 @@ export default async function RankingsPage({
               ))}
             </ol>
           </section>
-
-          <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <section>
-              <h2 className="mb-3 text-sm font-semibold text-neutral-500">장르별 런칭 추이</h2>
-              <TagLaunchTrendChart tagType="GENRE" options={result.genreStats} />
-            </section>
-            <section>
-              <h2 className="mb-3 text-sm font-semibold text-neutral-500">키워드별 런칭 추이</h2>
-              <TagLaunchTrendChart tagType="KEYWORD" options={result.keywordStats} />
-            </section>
-          </div>
         </div>
       )}
     </div>

@@ -1519,19 +1519,18 @@ export async function getTagStats(tagType: TagType, limit = 15): Promise<TagStat
   return (data ?? []) as TagStatRow[];
 }
 
-/** 여러 장르/키워드 태그가 붙은 작품들의 런칭일 목록을 한 번에 조회 (연재/완결/휴재 상태 무관,
- * 태그별 런칭 추이를 한 그래프에 여러 선으로 겹쳐 보여줄 때 태그마다 API를 따로 호출하지 않도록) */
-export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[]): Promise<Record<string, string[]>> {
-  if (tagNames.length === 0) return {};
+/** 태그별 title_id 목록 조회 (title_tags 기준, tag_type 하나에 여러 tag_name 한 번에) - 장르/키워드별
+ * 런칭 추이·다운로드 추이 그래프가 공통으로 쓴다. 두 가지 실측 문제를 같이 처리한다:
+ * 1) tag_name을 .in()에 한꺼번에(예: 키워드 292개 전체) 넣으면 URL이 PostgREST 헤더 크기
+ *    제한(16KB)을 넘어 요청 자체가 실패해서 태그를 작은 묶음으로 나눠 호출한다.
+ * 2) 태그 여러 개를 한 번에 물으면(예: 장르 10개 전체) 행 수가 PostgREST 기본 상한(1000)을
+ *    넘어 뒤쪽 태그들이 조용히 0건으로 빠지는 문제가 있어 페이지네이션으로 전부 받는다. */
+async function getTitleIdsByTagBatch(tagType: TagType, tagNames: string[]): Promise<Map<string, number[]>> {
+  const titleIdsByTag = new Map<string, Set<number>>();
+  if (tagNames.length === 0) return new Map();
   const supabase = getSupabaseAnon();
 
-  const titleIdsByTag = new Map<string, Set<number>>();
-  const allTitleIds = new Set<number>();
-  // 태그 이름을 .in()에 한꺼번에(예: 키워드 292개 전체) 넣으면 URL(쿼리스트링)이 PostgREST의
-  // 헤더 크기 제한(16KB)을 넘어 요청 자체가 실패한다 - 태그를 작은 묶음으로 나눠서 호출한다.
   const TAG_CHUNK_SIZE = 30;
-  // 태그 여러 개를 한 번에 물으면(예: 장르 10개 전체) 행 수가 PostgREST 기본 상한(1000)을 넘어
-  // 뒤쪽 태그들이 조용히 0건으로 빠지는 문제가 실제로 있었다 - 페이지네이션으로 전부 받는다.
   const PAGE_SIZE = 1000;
   for (let tagOffset = 0; tagOffset < tagNames.length; tagOffset += TAG_CHUNK_SIZE) {
     const tagChunk = tagNames.slice(tagOffset, tagOffset + TAG_CHUNK_SIZE);
@@ -1548,11 +1547,22 @@ export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[
         const titleId = row.title_id as number;
         if (!titleIdsByTag.has(tagName)) titleIdsByTag.set(tagName, new Set());
         titleIdsByTag.get(tagName)!.add(titleId);
-        allTitleIds.add(titleId);
       }
       if (!tagRows || tagRows.length < PAGE_SIZE) break;
     }
   }
+  return new Map([...titleIdsByTag.entries()].map(([tagName, ids]) => [tagName, [...ids]]));
+}
+
+/** 여러 장르/키워드 태그가 붙은 작품들의 런칭일 목록을 한 번에 조회 (연재/완결/휴재 상태 무관,
+ * 태그별 런칭 추이를 한 그래프에 여러 선으로 겹쳐 보여줄 때 태그마다 API를 따로 호출하지 않도록) */
+export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[]): Promise<Record<string, string[]>> {
+  if (tagNames.length === 0) return {};
+  const supabase = getSupabaseAnon();
+  const titleIdsByTag = await getTitleIdsByTagBatch(tagType, tagNames);
+
+  const allTitleIds = new Set<number>();
+  for (const ids of titleIdsByTag.values()) for (const id of ids) allTitleIds.add(id);
 
   const idsArray = [...allTitleIds];
   const launchDateById = new Map<number, string>();
@@ -1574,9 +1584,46 @@ export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[
 
   const result: Record<string, string[]> = {};
   for (const tagName of tagNames) {
-    const ids = titleIdsByTag.get(tagName) ?? new Set<number>();
-    result[tagName] = [...ids].map((id) => launchDateById.get(id)).filter((d): d is string => !!d);
+    const ids = titleIdsByTag.get(tagName) ?? [];
+    result[tagName] = ids.map((id) => launchDateById.get(id)).filter((d): d is string => !!d);
   }
+  return result;
+}
+
+/** 여러 장르에 속한 작품들의 시리즈 누적 다운로드수를 날짜별로 합산해 한 번에 조회 (장르별
+ * 다운로드/매출액 추정 추이 그래프용). 댓글수/인기순위까지 구하는 naver_titles_perf와 달리
+ * series_snapshots만 합산하는 가벼운 전용 함수(genre_download_series)를 쓴다. */
+export async function getTagDownloadSeriesBatch(
+  tagType: TagType,
+  tagNames: string[]
+): Promise<Record<string, SeriesSnapshotPoint[]>> {
+  if (tagNames.length === 0) return {};
+  const supabase = getSupabaseAnon();
+  const titleIdsByTag = await getTitleIdsByTagBatch(tagType, tagNames);
+
+  const CHUNK_SIZE = 500;
+  const result: Record<string, SeriesSnapshotPoint[]> = {};
+  await Promise.all(
+    tagNames.map(async (tagName) => {
+      const ids = titleIdsByTag.get(tagName) ?? [];
+      if (ids.length === 0) {
+        result[tagName] = [];
+        return;
+      }
+      const perDate = new Map<string, number>();
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+        const batch = ids.slice(i, i + CHUNK_SIZE);
+        const { data, error } = await supabase.rpc("genre_download_series", { target_ids: batch });
+        if (error) throw error;
+        for (const row of (data ?? []) as { snapshot_date: string; total_download: number }[]) {
+          perDate.set(row.snapshot_date, (perDate.get(row.snapshot_date) ?? 0) + row.total_download);
+        }
+      }
+      result[tagName] = [...perDate.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([snapshot_date, download_count]) => ({ snapshot_date, download_count }));
+    })
+  );
   return result;
 }
 

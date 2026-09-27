@@ -65,11 +65,27 @@ function ComparisonChart({
   const chartData = mergeSeries(withData);
   const ChartComponent = variant === "bar" ? BarChart : LineChart;
   const colorFor = (s: ComparisonSeries) => (activeId === null || activeId === String(s.titleId) ? s.color : INACTIVE_COLOR);
-  const highlight = (id: string | null) => setActiveId(id);
+  // 범례/막대/선을 클릭하면 해당 작품만 계속 강조되도록 고정 - 다시 클릭하면 해제(전체 보기로 복귀)
+  const toggleActive = (id: string) => setActiveId((prev) => (prev === id ? null : id));
+  const activeSeries = withData.find((s) => String(s.titleId) === activeId);
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-4">
       {headerControls && <div className="mb-2 flex justify-end gap-1">{headerControls}</div>}
+      {activeSeries && (
+        <div className="mb-2 flex items-center gap-1 text-xs text-neutral-500">
+          <span>
+            <span className="font-medium text-neutral-700">{activeSeries.titleName}</span> 강조 중
+          </span>
+          <button
+            type="button"
+            onClick={() => setActiveId(null)}
+            className="rounded bg-neutral-100 px-1.5 py-0.5 text-neutral-500 hover:bg-neutral-200"
+          >
+            해제
+          </button>
+        </div>
+      )}
       <div className="h-80 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <ChartComponent data={chartData} margin={{ top: variant === "bar" ? 24 : 10, right: 20, bottom: 0, left: 0 }}>
@@ -84,8 +100,7 @@ function ComparisonChart({
             )}
             <Legend
               wrapperStyle={{ fontSize: 12, cursor: "pointer" }}
-              onMouseEnter={(o) => highlight(o.dataKey != null ? String(o.dataKey) : null)}
-              onMouseLeave={() => highlight(null)}
+              onClick={(o) => o.dataKey != null && toggleActive(String(o.dataKey))}
             />
             {withData.map((s) =>
               variant === "bar" ? (
@@ -94,8 +109,8 @@ function ComparisonChart({
                   dataKey={String(s.titleId)}
                   name={s.titleName}
                   fill={colorFor(s)}
-                  onMouseEnter={() => highlight(String(s.titleId))}
-                  onMouseLeave={() => highlight(null)}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => toggleActive(String(s.titleId))}
                 >
                   <LabelList
                     dataKey={String(s.titleId)}
@@ -115,8 +130,8 @@ function ComparisonChart({
                   strokeWidth={activeId === String(s.titleId) ? 3 : 2}
                   dot={false}
                   connectNulls
-                  onMouseEnter={() => highlight(String(s.titleId))}
-                  onMouseLeave={() => highlight(null)}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => toggleActive(String(s.titleId))}
                 />
               )
             )}

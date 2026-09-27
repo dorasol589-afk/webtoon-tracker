@@ -1554,6 +1554,26 @@ $$;
 
 grant execute on function naver_launch_dates(bigint[]) to anon;
 
+-- 장르별 다운로드/매출액 추정 추이 그래프용: 태그 하나에 속한 작품 여러 개의 시리즈 누적
+-- 다운로드수를 날짜별로 합산해서 반환한다(작품별로 series_snapshots를 통째로 내려받지 않도록).
+drop function if exists genre_download_series(bigint[]);
+create or replace function genre_download_series(target_ids bigint[])
+returns table (
+  snapshot_date date,
+  total_download bigint
+)
+language sql
+stable
+as $$
+  select snapshot_date, sum(download_count) as total_download
+  from series_snapshots
+  where title_id = any(target_ids)
+  group by snapshot_date
+  order by snapshot_date;
+$$;
+
+grant execute on function genre_download_series(bigint[]) to anon;
+
 drop function if exists kakao_titles_perf(bigint[]);
 create or replace function kakao_titles_perf(target_ids bigint[])
 returns table (

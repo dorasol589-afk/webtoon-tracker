@@ -2,105 +2,71 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { TagStatRow, TagType } from "@/lib/queries";
+import type { TagStatRow, TagType, SeriesSnapshotPoint } from "@/lib/queries";
+import {
+  type Granularity,
+  aggregateByCalendarWeek,
+  aggregateByCalendarMonth,
+  formatCalendarWeekLabel,
+  formatMonthLabel,
+  toDeltaSeries,
+} from "@/lib/seriesTrend";
+import { formatWon } from "@/lib/format";
 import { TagPicker, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight } from "./TagChartCommon";
 
-type Granularity = "year" | "quarter" | "month";
+const PRICE_PER_DOWNLOAD = 300;
 
 const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
-  { value: "year", label: "연도별" },
-  { value: "quarter", label: "분기별" },
+  { value: "day", label: "일별" },
+  { value: "week", label: "주별" },
   { value: "month", label: "월별" },
 ];
 
-function bucketKey(date: string, granularity: Granularity): string {
-  const [y, m] = date.split("-").map(Number);
-  if (granularity === "year") return `${y}`;
-  if (granularity === "quarter") return `${y}-Q${Math.ceil(m / 3)}`;
-  return `${y}-${String(m).padStart(2, "0")}`;
+type Mode = "download" | "revenue";
+
+function reaggregate(points: SeriesSnapshotPoint[], granularity: Granularity): SeriesSnapshotPoint[] {
+  if (granularity === "day") return points;
+  return granularity === "week" ? aggregateByCalendarWeek(points) : aggregateByCalendarMonth(points);
 }
 
-function periodLabel(key: string, granularity: Granularity): string {
-  if (granularity === "year") return `${key}년`;
-  if (granularity === "quarter") {
-    const [y, q] = key.split("-Q");
-    return `${y.slice(2)}년 ${q}분기`;
-  }
-  const [y, m] = key.split("-");
-  return `${y.slice(2)}.${m}`;
+function xLabelFor(granularity: Granularity) {
+  if (granularity === "week") return formatCalendarWeekLabel;
+  if (granularity === "month") return formatMonthLabel;
+  return (d: string) => d;
 }
 
-function nextPeriodKey(key: string, granularity: Granularity): string {
-  if (granularity === "year") return String(Number(key) + 1);
-  if (granularity === "quarter") {
-    const [yStr, qStr] = key.split("-Q");
-    let y = Number(yStr);
-    let q = Number(qStr) + 1;
-    if (q > 4) {
-      q = 1;
-      y += 1;
-    }
-    return `${y}-Q${q}`;
+/** 태그마다 관측일이 달라도 하나의 그래프에서 겹쳐 볼 수 있도록 날짜 기준으로 병합 - 다운로드수는
+ * 누적값이라 없는 날짜를 0으로 채우면 실제로 없던 급락처럼 보이므로 null로 두고 connectNulls로 잇는다. */
+function mergeByDate(
+  dataByTag: Record<string, { snapshot_date: string; value: number }[]>,
+  tagNames: string[]
+): Record<string, string | number | null>[] {
+  const allDates = new Set<string>();
+  for (const tagName of tagNames) {
+    for (const p of dataByTag[tagName] ?? []) allDates.add(p.snapshot_date);
   }
-  const [yStr, mStr] = key.split("-");
-  let y = Number(yStr);
-  let m = Number(mStr) + 1;
-  if (m > 12) {
-    m = 1;
-    y += 1;
-  }
-  return `${y}-${String(m).padStart(2, "0")}`;
-}
-
-function bucketDates(dates: string[], granularity: Granularity): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const d of dates) {
-    const key = bucketKey(d, granularity);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return counts;
-}
-
-/** 태그마다 관측 기간이 달라도 하나의 그래프에서 겹쳐 볼 수 있도록 전체 태그를 통틀어 가장 이른
- * 기간 ~ 가장 늦은 기간까지 공통 축을 만들고, 작품이 하나도 없던 기간은 0으로 채운다 */
-function buildMergedSeries(
-  dataByTag: Record<string, string[]>,
-  tagNames: string[],
-  granularity: Granularity
-): Record<string, string | number>[] {
-  const countsByTag = new Map(tagNames.map((t) => [t, bucketDates(dataByTag[t] ?? [], granularity)]));
-  const allKeys = new Set<string>();
-  for (const counts of countsByTag.values()) {
-    for (const k of counts.keys()) allKeys.add(k);
-  }
-  if (allKeys.size === 0) return [];
-  const sortedKeys = [...allKeys].sort();
-  const firstKey = sortedKeys[0];
-  const lastKey = sortedKeys[sortedKeys.length - 1];
-
-  const rows: Record<string, string | number>[] = [];
-  let cur = firstKey;
-  let guard = 0;
-  while (guard < 3000) {
-    const row: Record<string, string | number> = { period: periodLabel(cur, granularity) };
+  const sortedDates = [...allDates].sort();
+  const valueMaps = new Map(
+    tagNames.map((t) => [t, new Map((dataByTag[t] ?? []).map((p) => [p.snapshot_date, p.value]))])
+  );
+  return sortedDates.map((date) => {
+    const row: Record<string, string | number | null> = { snapshot_date: date };
     for (const tagName of tagNames) {
-      row[tagName] = countsByTag.get(tagName)?.get(cur) ?? 0;
+      row[tagName] = valueMaps.get(tagName)?.get(date) ?? null;
     }
-    rows.push(row);
-    if (cur === lastKey) break;
-    cur = nextPeriodKey(cur, granularity);
-    guard++;
-  }
-  return rows;
+    return row;
+  });
 }
 
-export default function TagLaunchTrendChart({
+export default function TagMetricTrendChart({
   tagType,
   options,
-  defaultSelectedCount = 10,
+  mode,
+  defaultSelectedCount = 8,
 }: {
   tagType: TagType;
   options: TagStatRow[];
+  mode: Mode;
   defaultSelectedCount?: number;
 }) {
   const { selected, toggleTag, selectAllTags, selectTopNTags, deselectAllTags } = useTagSelection(
@@ -111,8 +77,8 @@ export default function TagLaunchTrendChart({
     () => options.filter((o) => selected.has(o.tag_name)).map((o) => o.tag_name),
     [options, selected]
   );
-  const [granularity, setGranularity] = useState<Granularity>("year");
-  const [dataByTag, setDataByTag] = useState<Record<string, string[]> | null>(null);
+  const [granularity, setGranularity] = useState<Granularity>("week");
+  const [rawByTag, setRawByTag] = useState<Record<string, SeriesSnapshotPoint[]> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { activeTag, setActiveTag, toggleActive } = useActiveHighlight();
@@ -123,17 +89,17 @@ export default function TagLaunchTrendChart({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 태그 선택 시 새로 fetch하는 동안 로딩 표시
     setLoading(true);
     setError(null);
-    fetch(`/api/tag-launch-dates?tagType=${tagType}&tagNames=${encodeURIComponent(tagNames.join(","))}`)
+    fetch(`/api/tag-download-series?tagType=${tagType}&tagNames=${encodeURIComponent(tagNames.join(","))}`)
       .then((res) => res.json())
       .then((json) => {
         if (cancelled) return;
         if (json.error) throw new Error(json.error);
-        setDataByTag(json.data as Record<string, string[]>);
+        setRawByTag(json.data as Record<string, SeriesSnapshotPoint[]>);
       })
       .catch((err) => {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
-        setDataByTag(null);
+        setRawByTag(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -143,10 +109,18 @@ export default function TagLaunchTrendChart({
     };
   }, [tagType, tagNames]);
 
-  const chartData = useMemo(
-    () => (dataByTag ? buildMergedSeries(dataByTag, tagNames, granularity) : []),
-    [dataByTag, tagNames, granularity]
-  );
+  const chartData = useMemo(() => {
+    if (!rawByTag) return [];
+    const valueByTag: Record<string, { snapshot_date: string; value: number }[]> = {};
+    for (const tagName of tagNames) {
+      const aggregated = reaggregate(rawByTag[tagName] ?? [], granularity);
+      valueByTag[tagName] =
+        mode === "download"
+          ? aggregated.map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count }))
+          : toDeltaSeries(aggregated).map((p) => ({ snapshot_date: p.snapshot_date, value: p.delta * PRICE_PER_DOWNLOAD }));
+    }
+    return mergeByDate(valueByTag, tagNames);
+  }, [rawByTag, tagNames, granularity, mode]);
 
   if (options.length === 0) {
     return (
@@ -155,6 +129,9 @@ export default function TagLaunchTrendChart({
       </div>
     );
   }
+
+  const xLabelFormatter = xLabelFor(granularity);
+  const valueFormatter = mode === "revenue" ? formatWon : (v: number) => v.toLocaleString();
 
   return (
     <div>
@@ -218,7 +195,7 @@ export default function TagLaunchTrendChart({
       )}
       {tagNames.length > 0 && !loading && !error && chartData.length === 0 && (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500">
-          런칭일 데이터 없음
+          데이터 없음
         </div>
       )}
       {tagNames.length > 0 && !loading && !error && chartData.length > 0 && (
@@ -227,9 +204,18 @@ export default function TagLaunchTrendChart({
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
-                <XAxis dataKey="period" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={30} />
-                <Tooltip content={(props) => <MetricTooltip {...props} activeTag={activeTag} />} />
+                <XAxis dataKey="snapshot_date" tick={{ fontSize: 10 }} tickFormatter={xLabelFormatter} />
+                <YAxis tick={{ fontSize: 11 }} width={50} tickFormatter={(v) => valueFormatter(Number(v))} />
+                <Tooltip
+                  content={(props) => (
+                    <MetricTooltip
+                      {...props}
+                      activeTag={activeTag}
+                      valueFormatter={valueFormatter}
+                      label={typeof props.label === "string" ? xLabelFormatter(props.label) : props.label}
+                    />
+                  )}
+                />
                 <Legend
                   wrapperStyle={{ fontSize: 11, cursor: "pointer" }}
                   onClick={(o) => o.dataKey != null && toggleActive(String(o.dataKey))}
@@ -243,6 +229,7 @@ export default function TagLaunchTrendChart({
                     stroke={colorForTag(idx, tagName, activeTag)}
                     strokeWidth={activeTag === tagName ? 3 : 1.5}
                     dot={false}
+                    connectNulls
                     style={{ cursor: "pointer" }}
                     onClick={() => toggleActive(tagName)}
                   />

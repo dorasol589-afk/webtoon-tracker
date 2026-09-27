@@ -49,8 +49,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <Link href="/recruit" className="hover:text-neutral-900">
                 채용공고
               </Link>
-              <Link href="/insights" className="hover:text-neutral-900">
-                AI 그래프
+              <Link href="/stats" className="hover:text-neutral-900">
+                통계
               </Link>
             </nav>
           </div>
