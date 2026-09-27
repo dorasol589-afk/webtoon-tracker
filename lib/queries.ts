@@ -1527,25 +1527,31 @@ export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[
 
   const titleIdsByTag = new Map<string, Set<number>>();
   const allTitleIds = new Set<number>();
+  // 태그 이름을 .in()에 한꺼번에(예: 키워드 292개 전체) 넣으면 URL(쿼리스트링)이 PostgREST의
+  // 헤더 크기 제한(16KB)을 넘어 요청 자체가 실패한다 - 태그를 작은 묶음으로 나눠서 호출한다.
+  const TAG_CHUNK_SIZE = 30;
   // 태그 여러 개를 한 번에 물으면(예: 장르 10개 전체) 행 수가 PostgREST 기본 상한(1000)을 넘어
   // 뒤쪽 태그들이 조용히 0건으로 빠지는 문제가 실제로 있었다 - 페이지네이션으로 전부 받는다.
   const PAGE_SIZE = 1000;
-  for (let offset = 0; ; offset += PAGE_SIZE) {
-    const { data: tagRows, error } = await supabase
-      .from("title_tags")
-      .select("title_id,tag_name")
-      .eq("tag_type", tagType)
-      .in("tag_name", tagNames)
-      .range(offset, offset + PAGE_SIZE - 1);
-    if (error) throw error;
-    for (const row of tagRows ?? []) {
-      const tagName = row.tag_name as string;
-      const titleId = row.title_id as number;
-      if (!titleIdsByTag.has(tagName)) titleIdsByTag.set(tagName, new Set());
-      titleIdsByTag.get(tagName)!.add(titleId);
-      allTitleIds.add(titleId);
+  for (let tagOffset = 0; tagOffset < tagNames.length; tagOffset += TAG_CHUNK_SIZE) {
+    const tagChunk = tagNames.slice(tagOffset, tagOffset + TAG_CHUNK_SIZE);
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const { data: tagRows, error } = await supabase
+        .from("title_tags")
+        .select("title_id,tag_name")
+        .eq("tag_type", tagType)
+        .in("tag_name", tagChunk)
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (error) throw error;
+      for (const row of tagRows ?? []) {
+        const tagName = row.tag_name as string;
+        const titleId = row.title_id as number;
+        if (!titleIdsByTag.has(tagName)) titleIdsByTag.set(tagName, new Set());
+        titleIdsByTag.get(tagName)!.add(titleId);
+        allTitleIds.add(titleId);
+      }
+      if (!tagRows || tagRows.length < PAGE_SIZE) break;
     }
-    if (!tagRows || tagRows.length < PAGE_SIZE) break;
   }
 
   const idsArray = [...allTitleIds];

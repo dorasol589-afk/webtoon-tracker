@@ -106,7 +106,8 @@ function TrendTooltip({
   activeTag,
 }: TooltipContentProps<ValueType, NameType> & { activeTag: string | null }) {
   if (!active || !payload || payload.length === 0) return null;
-  const base = activeTag ? payload.filter((p) => String(p.dataKey) === activeTag) : payload;
+  const filtered = activeTag ? payload.filter((p) => String(p.dataKey) === activeTag) : payload;
+  const base = filtered.length > 0 ? filtered : payload;
   const sorted = [...base].sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0));
   const shown = sorted.slice(0, TOOLTIP_MAX_ROWS);
   const hiddenCount = sorted.length - shown.length;
@@ -129,10 +130,18 @@ function TagPicker({
   options,
   selected,
   onToggle,
+  onSelectAll,
+  onDeselectAll,
+  onSelectTopN,
+  topN,
 }: {
   options: TagStatRow[];
   selected: Set<string>;
   onToggle: (tagName: string) => void;
+  onSelectAll: () => void;
+  onDeselectAll: () => void;
+  onSelectTopN: () => void;
+  topN: number;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -160,6 +169,29 @@ function TagPicker({
               placeholder="태그 검색..."
               className="mb-2 w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none"
             />
+            <div className="mb-2 flex gap-1">
+              <button
+                type="button"
+                onClick={onSelectTopN}
+                className="flex-1 rounded bg-neutral-100 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-200"
+              >
+                상위 {topN}개
+              </button>
+              <button
+                type="button"
+                onClick={onSelectAll}
+                className="flex-1 rounded bg-neutral-100 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-200"
+              >
+                전체 선택
+              </button>
+              <button
+                type="button"
+                onClick={onDeselectAll}
+                className="flex-1 rounded bg-neutral-100 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-200"
+              >
+                전체 해제
+              </button>
+            </div>
             <div className="max-h-64 overflow-y-auto">
               {filtered.length === 0 && (
                 <div className="p-2 text-center text-xs text-neutral-400">검색 결과 없음</div>
@@ -217,6 +249,23 @@ export default function TagLaunchTrendChart({
     });
   }
 
+  function selectAllTags() {
+    setSelected(new Set(options.map((o) => o.tag_name)));
+  }
+
+  function selectTopNTags() {
+    setSelected(new Set(options.slice(0, defaultSelectedCount).map((o) => o.tag_name)));
+  }
+
+  function deselectAllTags() {
+    setSelected(new Set());
+  }
+
+  /** 범례/선을 클릭하면 그 태그만 계속 강조되도록 고정 - 다시 클릭하면 해제(전체 보기로 복귀) */
+  function toggleActive(tagName: string) {
+    setActiveTag((prev) => (prev === tagName ? null : tagName));
+  }
+
   useEffect(() => {
     if (tagNames.length === 0) {
       setDataByTag({});
@@ -264,7 +313,15 @@ export default function TagLaunchTrendChart({
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-1">
-        <TagPicker options={options} selected={selected} onToggle={toggleTag} />
+        <TagPicker
+          options={options}
+          selected={selected}
+          onToggle={toggleTag}
+          onSelectAll={selectAllTags}
+          onDeselectAll={deselectAllTags}
+          onSelectTopN={selectTopNTags}
+          topN={defaultSelectedCount}
+        />
         <div className="flex gap-1">
           {GRANULARITY_OPTIONS.map((opt) => (
             <button
@@ -282,6 +339,21 @@ export default function TagLaunchTrendChart({
           ))}
         </div>
       </div>
+
+      {activeTag && (
+        <div className="mb-2 flex items-center gap-1 text-xs text-neutral-500">
+          <span>
+            <span className="font-medium text-neutral-700">{activeTag}</span> 강조 중
+          </span>
+          <button
+            type="button"
+            onClick={() => setActiveTag(null)}
+            className="rounded bg-neutral-100 px-1.5 py-0.5 text-neutral-500 hover:bg-neutral-200"
+          >
+            해제
+          </button>
+        </div>
+      )}
 
       {tagNames.length === 0 && (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500">
@@ -314,8 +386,7 @@ export default function TagLaunchTrendChart({
                 <Tooltip content={(props) => <TrendTooltip {...props} activeTag={activeTag} />} />
                 <Legend
                   wrapperStyle={{ fontSize: 11, cursor: "pointer" }}
-                  onMouseEnter={(o) => setActiveTag(o.dataKey != null ? String(o.dataKey) : null)}
-                  onMouseLeave={() => setActiveTag(null)}
+                  onClick={(o) => o.dataKey != null && toggleActive(String(o.dataKey))}
                 />
                 {tagNames.map((tagName, idx) => (
                   <Line
@@ -326,8 +397,8 @@ export default function TagLaunchTrendChart({
                     stroke={colorFor(idx, tagName)}
                     strokeWidth={activeTag === tagName ? 3 : 1.5}
                     dot={false}
-                    onMouseEnter={() => setActiveTag(tagName)}
-                    onMouseLeave={() => setActiveTag(null)}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => toggleActive(tagName)}
                   />
                 ))}
               </LineChart>
