@@ -192,6 +192,7 @@ async function main() {
       painter: string | null;
       origin_author: string | null;
       age_rating: string;
+      is_novel_origin: boolean;
     }[] = [];
     let infoFailures = 0;
     await Promise.all(
@@ -208,6 +209,7 @@ async function main() {
               painter: info.painters.join(", ") || null,
               origin_author: info.originAuthors.join(", ") || null,
               age_rating: info.ageRating,
+              is_novel_origin: info.isNovelOrigin,
             });
           } catch (err) {
             infoFailures++;
@@ -788,7 +790,7 @@ async function main() {
     outer: while (Date.now() < deadline) {
       const { data: pending, error: pendingError } = await supabase
         .from("titles")
-        .select("title_id")
+        .select("title_id,title_name,is_adult")
         .eq("is_finished", true)
         .is("finished_backfilled_at", null)
         .order("title_id", { ascending: true })
@@ -808,7 +810,84 @@ async function main() {
           break outer;
         }
         const t = finishedById.get(row.title_id);
-        const label = t?.titleName ?? String(row.title_id);
+        const label = row.title_name ?? t?.titleName ?? String(row.title_id);
+        const isAdult = row.is_adult ?? t?.adult ?? false;
+
+        // 성인 완결작은 article/list, article/list/info가 로그인 없이 401로 막혀있어
+        // fetchAllEpisodes/fetchTitleInfo가 그대로 던져서 finished_backfilled_at이 영영 안 찍히고
+        // (매일 밤 재시도만 반복) episodes가 비어 launch_date가 first_seen_at으로 잘못 나오는 문제가
+        // 실제로 있었다("좀비를 위한 나라는 없다" 등) - 일일 수집기의 연재중 성인 작품 처리와
+        // 동일하게 댓글 API 이진탐색 + 나무위키 런칭일 조회로 대체한다.
+        if (isAdult) {
+          try {
+            const lastNo = await findLastEpisodeNoViaComments(row.title_id);
+            if (lastNo > 0) {
+              const { data: existingFirst } = await supabase
+                .from("episodes")
+                .select("service_date")
+                .eq("title_id", row.title_id)
+                .eq("no", 1)
+                .maybeSingle();
+              const firstEpisodeDate = existingFirst?.service_date ?? (await findAdultTitleLaunchDate(label));
+
+              const episodeRows = Array.from({ length: lastNo }, (_, i) => ({
+                title_id: row.title_id,
+                no: i + 1,
+                subtitle: null,
+                service_date: i === 0 ? firstEpisodeDate : null,
+                is_free: true,
+              }));
+              for (const batch of chunk(episodeRows, 500)) {
+                const { error } = await supabase.from("episodes").upsert(batch, { onConflict: "title_id,no" });
+                if (error) console.error(`  episodes upsert 실패(완결 성인, ${label}):`, error.message);
+              }
+
+              const commentResults = await Promise.all(
+                episodeRows.map((e) =>
+                  commentLimitFinished(async () => {
+                    try {
+                      const stats = await fetchCommentStats(row.title_id, e.no);
+                      return {
+                        title_id: row.title_id,
+                        no: e.no,
+                        snapshot_date: snapshotDate,
+                        comment_count: stats.commentCount,
+                        post_count: stats.postCount,
+                      };
+                    } catch {
+                      return null;
+                    }
+                  })
+                )
+              );
+              const snapshotRows = dedupeBy(
+                commentResults.filter((r): r is NonNullable<typeof r> => r !== null),
+                (r) => `${r.title_id}_${r.no}`
+              );
+              for (const batch of chunk(snapshotRows, 500)) {
+                const { error } = await supabase
+                  .from("comment_snapshots")
+                  .upsert(batch, { onConflict: "title_id,no,snapshot_date" });
+                if (error) console.error(`  comment_snapshots upsert 실패 (${label}):`, error.message);
+              }
+            }
+
+            const { error: markError } = await supabase
+              .from("titles")
+              .update({ finished_backfilled_at: new Date().toISOString() })
+              .eq("title_id", row.title_id);
+            if (markError) console.error(`  백필 완료 표시 실패 (${label}):`, markError.message);
+
+            finishedBackfilledCount++;
+            if (finishedBackfilledCount % 50 === 0) {
+              console.log(`  진행: ${finishedBackfilledCount}개 백필 완료...`);
+            }
+          } catch (err) {
+            console.error(`  완결작(성인) 백필 실패 (titleId=${row.title_id}, ${label}):`, err);
+          }
+          continue;
+        }
+
         try {
           const [episodes, info] = await Promise.all([
             episodeLimitFinished(() => fetchAllEpisodes(row.title_id)),
@@ -839,6 +918,7 @@ async function main() {
                 painter: info.painters.join(", ") || null,
                 origin_author: info.originAuthors.join(", ") || null,
                 age_rating: info.ageRating,
+                is_novel_origin: info.isNovelOrigin,
               },
               { onConflict: "title_id" }
             );
