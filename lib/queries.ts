@@ -1524,36 +1524,52 @@ export async function getTagStats(tagType: TagType, limit = 15): Promise<TagStat
 export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[]): Promise<Record<string, string[]>> {
   if (tagNames.length === 0) return {};
   const supabase = getSupabaseAnon();
-  const { data: tagRows, error } = await supabase
-    .from("title_tags")
-    .select("title_id,tag_name")
-    .eq("tag_type", tagType)
-    .in("tag_name", tagNames);
-  if (error) throw error;
 
   const titleIdsByTag = new Map<string, Set<number>>();
   const allTitleIds = new Set<number>();
-  for (const row of tagRows ?? []) {
-    const tagName = row.tag_name as string;
-    const titleId = row.title_id as number;
-    if (!titleIdsByTag.has(tagName)) titleIdsByTag.set(tagName, new Set());
-    titleIdsByTag.get(tagName)!.add(titleId);
-    allTitleIds.add(titleId);
+  // 태그 여러 개를 한 번에 물으면(예: 장르 10개 전체) 행 수가 PostgREST 기본 상한(1000)을 넘어
+  // 뒤쪽 태그들이 조용히 0건으로 빠지는 문제가 실제로 있었다 - 페이지네이션으로 전부 받는다.
+  const PAGE_SIZE = 1000;
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data: tagRows, error } = await supabase
+      .from("title_tags")
+      .select("title_id,tag_name")
+      .eq("tag_type", tagType)
+      .in("tag_name", tagNames)
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const row of tagRows ?? []) {
+      const tagName = row.tag_name as string;
+      const titleId = row.title_id as number;
+      if (!titleIdsByTag.has(tagName)) titleIdsByTag.set(tagName, new Set());
+      titleIdsByTag.get(tagName)!.add(titleId);
+      allTitleIds.add(titleId);
+    }
+    if (!tagRows || tagRows.length < PAGE_SIZE) break;
   }
 
-  const perfMap = new Map<number, NaverTitlePerf>();
   const idsArray = [...allTitleIds];
+  const launchDateById = new Map<number, string>();
   const CHUNK_SIZE = 500;
-  for (let i = 0; i < idsArray.length; i += CHUNK_SIZE) {
-    const batch = idsArray.slice(i, i + CHUNK_SIZE);
-    const batchMap = await getNaverTitlesPerf(batch);
-    for (const [id, perf] of batchMap) perfMap.set(id, perf);
+  const chunks: number[][] = [];
+  for (let i = 0; i < idsArray.length; i += CHUNK_SIZE) chunks.push(idsArray.slice(i, i + CHUNK_SIZE));
+  const chunkResults = await Promise.all(
+    chunks.map(async (batch) => {
+      const { data, error } = await supabase.rpc("naver_launch_dates", { target_ids: batch });
+      if (error) throw error;
+      return (data ?? []) as { title_id: number; launch_date: string | null }[];
+    })
+  );
+  for (const rows of chunkResults) {
+    for (const r of rows) {
+      if (r.launch_date) launchDateById.set(r.title_id, r.launch_date);
+    }
   }
 
   const result: Record<string, string[]> = {};
   for (const tagName of tagNames) {
     const ids = titleIdsByTag.get(tagName) ?? new Set<number>();
-    result[tagName] = [...ids].map((id) => perfMap.get(id)?.launch_date).filter((d): d is string => !!d);
+    result[tagName] = [...ids].map((id) => launchDateById.get(id)).filter((d): d is string => !!d);
   }
   return result;
 }

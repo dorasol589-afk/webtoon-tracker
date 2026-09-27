@@ -1526,6 +1526,34 @@ $$;
 
 grant execute on function naver_titles_perf(bigint[]) to anon;
 
+-- naver_titles_perf는 댓글수/다운로드수/인기순위까지 같이 구하느라 comment_snapshots,
+-- series_snapshots, title_snapshots까지 조인한다 - 장르/키워드별 런칭 추이 그래프처럼
+-- 태그 하나에 수백~수천 개 작품의 런칭일만 필요한 경우 이 무거운 조인이 그대로 병목이 되어
+-- 실제로 statement timeout이 났다. episodes/titles만 보는 가벼운 버전을 따로 둔다.
+drop function if exists naver_launch_dates(bigint[]);
+create or replace function naver_launch_dates(target_ids bigint[])
+returns table (
+  title_id bigint,
+  launch_date date
+)
+language sql
+stable
+as $$
+  with naver_launch as (
+    select title_id, min(service_date) as launch_date
+    from episodes where title_id = any(target_ids)
+    group by title_id
+  )
+  select
+    ti.title_id,
+    coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date
+  from titles ti
+  left join naver_launch nl on nl.title_id = ti.title_id
+  where ti.title_id = any(target_ids);
+$$;
+
+grant execute on function naver_launch_dates(bigint[]) to anon;
+
 drop function if exists kakao_titles_perf(bigint[]);
 create or replace function kakao_titles_perf(target_ids bigint[])
 returns table (
