@@ -125,16 +125,103 @@ function TrendTooltip({
   );
 }
 
-export default function TagLaunchTrendChart({ tagType, options }: { tagType: TagType; options: TagStatRow[] }) {
-  const tagNames = useMemo(() => options.map((o) => o.tag_name), [options]);
+function TagPicker({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: TagStatRow[];
+  selected: Set<string>;
+  onToggle: (tagName: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const filtered = search.trim()
+    ? options.filter((o) => o.tag_name.includes(search.trim()))
+    : options;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
+      >
+        태그 선택 ({selected.size}/{options.length})
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 z-20 mt-1 w-64 rounded-lg border border-neutral-200 bg-white p-2 shadow-lg">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="태그 검색..."
+              className="mb-2 w-full rounded border border-neutral-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none"
+            />
+            <div className="max-h-64 overflow-y-auto">
+              {filtered.length === 0 && (
+                <div className="p-2 text-center text-xs text-neutral-400">검색 결과 없음</div>
+              )}
+              {filtered.map((o) => (
+                <label
+                  key={o.tag_name}
+                  className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-neutral-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(o.tag_name)}
+                    onChange={() => onToggle(o.tag_name)}
+                  />
+                  <span className="flex-1 truncate">{o.tag_name}</span>
+                  <span className="text-neutral-400">{o.title_count}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function TagLaunchTrendChart({
+  tagType,
+  options,
+  defaultSelectedCount = 10,
+}: {
+  tagType: TagType;
+  options: TagStatRow[];
+  defaultSelectedCount?: number;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(options.slice(0, defaultSelectedCount).map((o) => o.tag_name))
+  );
+  const tagNames = useMemo(
+    () => options.filter((o) => selected.has(o.tag_name)).map((o) => o.tag_name),
+    [options, selected]
+  );
   const [granularity, setGranularity] = useState<Granularity>("year");
   const [dataByTag, setDataByTag] = useState<Record<string, string[]> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTag, setActiveTag] = useState<string | null>(null);
 
+  function toggleTag(tagName: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(tagName)) next.delete(tagName);
+      else next.add(tagName);
+      return next;
+    });
+  }
+
   useEffect(() => {
-    if (tagNames.length === 0) return;
+    if (tagNames.length === 0) {
+      setDataByTag({});
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -176,39 +263,47 @@ export default function TagLaunchTrendChart({ tagType, options }: { tagType: Tag
 
   return (
     <div>
-      <div className="mb-2 flex justify-end gap-1">
-        {GRANULARITY_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => setGranularity(opt.value)}
-            className={`rounded px-2 py-1 text-xs ${
-              granularity === opt.value
-                ? "bg-neutral-800 text-white"
-                : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
+      <div className="mb-2 flex items-center justify-between gap-1">
+        <TagPicker options={options} selected={selected} onToggle={toggleTag} />
+        <div className="flex gap-1">
+          {GRANULARITY_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setGranularity(opt.value)}
+              className={`rounded px-2 py-1 text-xs ${
+                granularity === opt.value
+                  ? "bg-neutral-800 text-white"
+                  : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {loading && (
+      {tagNames.length === 0 && (
+        <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500">
+          태그를 선택해주세요.
+        </div>
+      )}
+      {tagNames.length > 0 && loading && (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500">
           불러오는 중...
         </div>
       )}
-      {!loading && error && (
+      {tagNames.length > 0 && !loading && error && (
         <div className="rounded-lg border border-rose-200 bg-rose-50 p-8 text-center text-sm text-rose-700">
           {error}
         </div>
       )}
-      {!loading && !error && chartData.length === 0 && (
+      {tagNames.length > 0 && !loading && !error && chartData.length === 0 && (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500">
           런칭일 데이터 없음
         </div>
       )}
-      {!loading && !error && chartData.length > 0 && (
+      {tagNames.length > 0 && !loading && !error && chartData.length > 0 && (
         <div className="rounded-lg border border-neutral-200 bg-white p-4">
           <div className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">

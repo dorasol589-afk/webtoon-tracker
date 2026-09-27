@@ -110,7 +110,7 @@ async function loadData(
       getWeekdayPopularityRanking(selectedWeekday, 5),
       getRealtimeRankingLive("TOTAL", "NEW"),
       getTagStats("GENRE", 40),
-      getTagStats("KEYWORD", 40),
+      getTagStats("KEYWORD", 500),
       getTitlesLaunchedThisWeek(),
       getTitlesNeedingStudioFix(),
       getTopTitlesByDownload(10),
