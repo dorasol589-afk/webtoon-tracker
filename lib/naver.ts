@@ -407,6 +407,7 @@ export interface TitleInfo {
   genres: string[];
   keywords: string[];
   ageRating: string;
+  isNovelOrigin: boolean;
 }
 
 interface ArticleListInfoFullResponse {
@@ -425,16 +426,21 @@ export async function fetchTitleInfo(titleId: number): Promise<TitleInfo> {
   const writers: string[] = [];
   const painters: string[] = [];
   const originAuthors: string[] = [];
+  let isNovelOrigin = false;
   for (const a of data.communityArtists ?? []) {
     if (a.artistTypeList.includes("ARTIST_WRITER")) writers.push(a.name);
     if (a.artistTypeList.includes("ARTIST_PAINTER")) painters.push(a.name);
     if (a.artistTypeList.some((t) => t.includes("ORIGIN"))) originAuthors.push(a.name);
+    // 원작 크레딧 중 소설 원작만 콕 집어 구분하는 값(다른 원작 타입과 혼동하지 않도록 접두사
+    // "ORIGIN"이 아니라 정확히 이 문자열만 확인). curationTagList의 NOVEL_ORIGIN 태그도 같이 확인.
+    if (a.artistTypeList.includes("ARTIST_NOVEL_ORIGIN")) isNovelOrigin = true;
   }
   const genres: string[] = [];
   const keywords: string[] = [];
   for (const tag of data.curationTagList ?? []) {
     if (tag.curationType.startsWith("GENRE_")) genres.push(tag.tagName);
     else if (tag.curationType === "CUSTOM_TAG") keywords.push(tag.tagName);
+    else if (tag.curationType === "NOVEL_ORIGIN") isNovelOrigin = true;
   }
   const ageRating = data.age?.description || "전체이용가";
   return {
@@ -445,6 +451,7 @@ export async function fetchTitleInfo(titleId: number): Promise<TitleInfo> {
     genres,
     keywords,
     ageRating,
+    isNovelOrigin,
   };
 }
 
