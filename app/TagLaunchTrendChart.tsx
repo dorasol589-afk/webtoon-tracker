@@ -147,7 +147,7 @@ export default function TagLaunchTrendChart({
     () => (dataByTag ? buildMergedSeries(dataByTag, tagNames, granularity) : []),
     [dataByTag, tagNames, granularity]
   );
-  const { range, containerRef, handleWheel, resetZoom, isZoomed } = useWheelZoom(chartData.length, 30, 20);
+  const { range, containerRef, resetZoom, isZoomed } = useWheelZoom(chartData.length, 30, 20);
   const visibleData = chartData.slice(range[0], range[1] + 1);
 
   if (options.length === 0) {
@@ -236,7 +236,7 @@ export default function TagLaunchTrendChart({
               </button>
             </div>
           )}
-          <div ref={containerRef} onWheel={handleWheel} className="h-80 w-full">
+          <div ref={containerRef} className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={visibleData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type WheelEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import type { TagStatRow } from "@/lib/queries";
@@ -173,7 +173,11 @@ const MIN_VISIBLE_POINTS = 4;
 /** 그래프 위에서 마우스 휠을 굴리면 커서가 있는 지점을 중심으로 확대/축소한다(위로 굴리면 확대,
  * 아래로 굴리면 축소). recharts 자체엔 휠 줌이 없어서, 보여줄 데이터 구간[start, end]을 우리가
  * 들고 있다가 잘라서 넘기는 방식으로 구현 - x축이 날짜/기간 같은 카테고리 축이라 픽셀 위치를
- * "몇 번째 데이터인지"로 근사 환산한다(차트의 왼쪽 여백=plotLeft, 오른쪽 여백=plotRight). */
+ * "몇 번째 데이터인지"로 근사 환산한다(차트의 왼쪽 여백=plotLeft, 오른쪽 여백=plotRight).
+ *
+ * React의 onWheel prop으로 붙이면 브라우저가 wheel 리스너를 기본 passive로 등록해서
+ * preventDefault()가 무시되고 페이지 전체가 같이 스크롤되는 문제가 실제로 있었다 - 컨테이너에
+ * addEventListener(..., { passive: false })로 직접 붙여야 preventDefault가 먹는다. */
 export function useWheelZoom(length: number, plotLeft: number, plotRight: number) {
   const [range, setRange] = useState<[number, number]>([0, Math.max(0, length - 1)]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -186,41 +190,49 @@ export function useWheelZoom(length: number, plotLeft: number, plotRight: number
     setRange([0, Math.max(0, length - 1)]);
   }
 
-  function handleWheel(e: WheelEvent<HTMLDivElement>) {
-    if (length <= MIN_VISIBLE_POINTS) return;
-    e.preventDefault();
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const plotWidth = Math.max(1, rect.width - plotLeft - plotRight);
-    const xInPlot = e.clientX - rect.left - plotLeft;
-    const fraction = Math.min(1, Math.max(0, xInPlot / plotWidth));
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
 
-    const [start, end] = range;
-    const curLength = end - start;
-    const cursorIndex = start + fraction * curLength;
+    const onWheel = (e: globalThis.WheelEvent) => {
+      if (length <= MIN_VISIBLE_POINTS) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const plotWidth = Math.max(1, rect.width - plotLeft - plotRight);
+      const xInPlot = e.clientX - rect.left - plotLeft;
+      const fraction = Math.min(1, Math.max(0, xInPlot / plotWidth));
 
-    const zoomFactor = e.deltaY < 0 ? 0.85 : 1 / 0.85;
-    const newLength = Math.min(length - 1, Math.max(MIN_VISIBLE_POINTS - 1, curLength * zoomFactor));
+      const zoomFactor = e.deltaY < 0 ? 0.85 : 1 / 0.85;
+      // 함수형 업데이트를 써서 트랙패드처럼 휠 이벤트가 짧은 시간에 여러 번 몰아쳐도(리액트가
+      // 아직 커밋 전이라도) 매번 직전 range를 정확히 이어받아 계산한다.
+      setRange(([start, end]) => {
+        const curLength = end - start;
+        const cursorIndex = start + fraction * curLength;
+        const newLength = Math.min(length - 1, Math.max(MIN_VISIBLE_POINTS - 1, curLength * zoomFactor));
 
-    let newStart = cursorIndex - fraction * newLength;
-    let newEnd = newStart + newLength;
-    if (newStart < 0) {
-      newEnd -= newStart;
-      newStart = 0;
-    }
-    if (newEnd > length - 1) {
-      newStart -= newEnd - (length - 1);
-      newEnd = length - 1;
-    }
-    newStart = Math.max(0, newStart);
+        let newStart = cursorIndex - fraction * newLength;
+        let newEnd = newStart + newLength;
+        if (newStart < 0) {
+          newEnd -= newStart;
+          newStart = 0;
+        }
+        if (newEnd > length - 1) {
+          newStart -= newEnd - (length - 1);
+          newEnd = length - 1;
+        }
+        newStart = Math.max(0, newStart);
+        return [Math.round(newStart), Math.round(newEnd)];
+      });
+    };
 
-    setRange([Math.round(newStart), Math.round(newEnd)]);
-  }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [length, plotLeft, plotRight]);
 
   function resetZoom() {
     setRange([0, Math.max(0, length - 1)]);
   }
 
   const isZoomed = range[0] > 0 || range[1] < length - 1;
-  return { range, containerRef, handleWheel, resetZoom, isZoomed };
+  return { range, containerRef, resetZoom, isZoomed };
 }
