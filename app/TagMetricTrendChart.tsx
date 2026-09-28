@@ -23,6 +23,12 @@ const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
 ];
 
 type Mode = "download" | "revenue";
+type ViewMode = "cumulative" | "delta";
+
+const VIEW_MODE_OPTIONS: { value: ViewMode; label: string }[] = [
+  { value: "cumulative", label: "누적" },
+  { value: "delta", label: "증감" },
+];
 
 function reaggregate(points: SeriesSnapshotPoint[], granularity: Granularity): SeriesSnapshotPoint[] {
   if (granularity === "day") return points;
@@ -78,6 +84,7 @@ export default function TagMetricTrendChart({
     [options, selected]
   );
   const [granularity, setGranularity] = useState<Granularity>("week");
+  const [viewMode, setViewMode] = useState<ViewMode>("cumulative");
   const [rawByTag, setRawByTag] = useState<Record<string, SeriesSnapshotPoint[]> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,13 +121,19 @@ export default function TagMetricTrendChart({
     const valueByTag: Record<string, { snapshot_date: string; value: number }[]> = {};
     for (const tagName of tagNames) {
       const aggregated = reaggregate(rawByTag[tagName] ?? [], granularity);
-      valueByTag[tagName] =
-        mode === "download"
-          ? aggregated.map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count }))
-          : toDeltaSeries(aggregated).map((p) => ({ snapshot_date: p.snapshot_date, value: p.delta * PRICE_PER_DOWNLOAD }));
+      if (mode === "revenue") {
+        valueByTag[tagName] = toDeltaSeries(aggregated).map((p) => ({
+          snapshot_date: p.snapshot_date,
+          value: p.delta * PRICE_PER_DOWNLOAD,
+        }));
+      } else if (viewMode === "delta") {
+        valueByTag[tagName] = toDeltaSeries(aggregated).map((p) => ({ snapshot_date: p.snapshot_date, value: p.delta }));
+      } else {
+        valueByTag[tagName] = aggregated.map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count }));
+      }
     }
     return mergeByDate(valueByTag, tagNames);
-  }, [rawByTag, tagNames, granularity, mode]);
+  }, [rawByTag, tagNames, granularity, mode, viewMode]);
 
   if (options.length === 0) {
     return (
@@ -146,6 +159,22 @@ export default function TagMetricTrendChart({
           topN={defaultSelectedCount}
         />
         <div className="flex gap-1">
+          {mode === "download" &&
+            VIEW_MODE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setViewMode(opt.value)}
+                className={`rounded px-2 py-1 text-xs ${
+                  viewMode === opt.value
+                    ? "bg-neutral-800 text-white"
+                    : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          {mode === "download" && <span className="mx-1 text-neutral-300">|</span>}
           {GRANULARITY_OPTIONS.map((opt) => (
             <button
               key={opt.value}
@@ -205,7 +234,7 @@ export default function TagMetricTrendChart({
               <LineChart data={chartData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
                 <XAxis dataKey="snapshot_date" tick={{ fontSize: 10 }} tickFormatter={xLabelFormatter} />
-                <YAxis tick={{ fontSize: 11 }} width={50} tickFormatter={(v) => valueFormatter(Number(v))} />
+                <YAxis tick={{ fontSize: 11 }} width={50} domain={[0, "auto"]} tickFormatter={(v) => valueFormatter(Number(v))} />
                 <Tooltip
                   content={(props) => (
                     <MetricTooltip

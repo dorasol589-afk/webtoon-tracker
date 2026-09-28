@@ -1556,6 +1556,11 @@ grant execute on function naver_launch_dates(bigint[]) to anon;
 
 -- 장르별 다운로드/매출액 추정 추이 그래프용: 태그 하나에 속한 작품 여러 개의 시리즈 누적
 -- 다운로드수를 날짜별로 합산해서 반환한다(작품별로 series_snapshots를 통째로 내려받지 않도록).
+-- 장르 안 작품 수가 너무 많으면(로맨스 1190개 등) 매일 밤 전부 다시 확인하지 못하고 일부만
+-- 갱신되는데, 그날그날 갱신되는 작품 구성이 달라서 단순 합산은 "그날 마침 갱신 안 된 큰 작품"
+-- 때문에 실제로는 줄지 않았는데도 합계가 순간적으로 뚝 떨어지는 문제가 있었다(실측: 로맨스
+-- 9/21→9/22에 "이섭의 연애" 1,399만 다운로드작이 그날 갱신 대상에서 빠져 총합이 감소해보임).
+-- 작품별로 마지막으로 확인된 값을 다음 갱신일까지 이어붙인(forward-fill) 뒤에 합산해서 해결.
 drop function if exists genre_download_series(bigint[]);
 create or replace function genre_download_series(target_ids bigint[])
 returns table (
@@ -1565,9 +1570,33 @@ returns table (
 language sql
 stable
 as $$
+  with dates as (
+    select distinct snapshot_date from series_snapshots where title_id = any(target_ids)
+  ),
+  tds as (
+    select distinct title_id from series_snapshots where title_id = any(target_ids)
+  ),
+  grid as (
+    select tds.title_id, dates.snapshot_date
+    from tds cross join dates
+  ),
+  joined as (
+    select g.title_id, g.snapshot_date, ss.download_count
+    from grid g
+    left join series_snapshots ss on ss.title_id = g.title_id and ss.snapshot_date = g.snapshot_date
+  ),
+  grouped as (
+    select *,
+      count(download_count) over (partition by title_id order by snapshot_date) as grp
+    from joined
+  ),
+  filled as (
+    select title_id, snapshot_date, max(download_count) over (partition by title_id, grp) as download_count
+    from grouped
+  )
   select snapshot_date, sum(download_count) as total_download
-  from series_snapshots
-  where title_id = any(target_ids)
+  from filled
+  where download_count is not null
   group by snapshot_date
   order by snapshot_date;
 $$;
