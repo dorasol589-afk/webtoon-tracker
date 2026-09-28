@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { TagStatRow, TagType } from "@/lib/queries";
-import { TagPicker, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight } from "./TagChartCommon";
+import { TagPicker, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
 
 type Granularity = "year" | "quarter" | "month";
 
@@ -147,6 +147,8 @@ export default function TagLaunchTrendChart({
     () => (dataByTag ? buildMergedSeries(dataByTag, tagNames, granularity) : []),
     [dataByTag, tagNames, granularity]
   );
+  const { range, containerRef, handleWheel, resetZoom, isZoomed } = useWheelZoom(chartData.length, 30, 20);
+  const visibleData = chartData.slice(range[0], range[1] + 1);
 
   if (options.length === 0) {
     return (
@@ -223,9 +225,20 @@ export default function TagLaunchTrendChart({
       )}
       {tagNames.length > 0 && !loading && !error && chartData.length > 0 && (
         <div className="rounded-lg border border-neutral-200 bg-white p-4">
-          <div className="h-80 w-full">
+          {isZoomed && (
+            <div className="mb-1 flex justify-end">
+              <button
+                type="button"
+                onClick={resetZoom}
+                className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500 hover:bg-neutral-200"
+              >
+                전체 보기
+              </button>
+            </div>
+          )}
+          <div ref={containerRef} onWheel={handleWheel} className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+              <LineChart data={visibleData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={30} />

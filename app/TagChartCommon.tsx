@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type WheelEvent } from "react";
 import type { TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import type { TagStatRow } from "@/lib/queries";
@@ -166,4 +166,61 @@ export function useActiveHighlight() {
     setActiveTag((prev) => (prev === tagName ? null : tagName));
   }
   return { activeTag, setActiveTag, toggleActive };
+}
+
+const MIN_VISIBLE_POINTS = 4;
+
+/** 그래프 위에서 마우스 휠을 굴리면 커서가 있는 지점을 중심으로 확대/축소한다(위로 굴리면 확대,
+ * 아래로 굴리면 축소). recharts 자체엔 휠 줌이 없어서, 보여줄 데이터 구간[start, end]을 우리가
+ * 들고 있다가 잘라서 넘기는 방식으로 구현 - x축이 날짜/기간 같은 카테고리 축이라 픽셀 위치를
+ * "몇 번째 데이터인지"로 근사 환산한다(차트의 왼쪽 여백=plotLeft, 오른쪽 여백=plotRight). */
+export function useWheelZoom(length: number, plotLeft: number, plotRight: number) {
+  const [range, setRange] = useState<[number, number]>([0, Math.max(0, length - 1)]);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // 데이터 길이가 바뀌면(태그/기간 변경 등) 줌 범위를 초기화 - effect 대신 렌더 중 상태 조정
+  // 패턴(React 공식 권장)을 써서 매번 리렌더 후 추가로 setState가 도는 걸 피한다.
+  const [prevLength, setPrevLength] = useState(length);
+  if (length !== prevLength) {
+    setPrevLength(length);
+    setRange([0, Math.max(0, length - 1)]);
+  }
+
+  function handleWheel(e: WheelEvent<HTMLDivElement>) {
+    if (length <= MIN_VISIBLE_POINTS) return;
+    e.preventDefault();
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const plotWidth = Math.max(1, rect.width - plotLeft - plotRight);
+    const xInPlot = e.clientX - rect.left - plotLeft;
+    const fraction = Math.min(1, Math.max(0, xInPlot / plotWidth));
+
+    const [start, end] = range;
+    const curLength = end - start;
+    const cursorIndex = start + fraction * curLength;
+
+    const zoomFactor = e.deltaY < 0 ? 0.85 : 1 / 0.85;
+    const newLength = Math.min(length - 1, Math.max(MIN_VISIBLE_POINTS - 1, curLength * zoomFactor));
+
+    let newStart = cursorIndex - fraction * newLength;
+    let newEnd = newStart + newLength;
+    if (newStart < 0) {
+      newEnd -= newStart;
+      newStart = 0;
+    }
+    if (newEnd > length - 1) {
+      newStart -= newEnd - (length - 1);
+      newEnd = length - 1;
+    }
+    newStart = Math.max(0, newStart);
+
+    setRange([Math.round(newStart), Math.round(newEnd)]);
+  }
+
+  function resetZoom() {
+    setRange([0, Math.max(0, length - 1)]);
+  }
+
+  const isZoomed = range[0] > 0 || range[1] < length - 1;
+  return { range, containerRef, handleWheel, resetZoom, isZoomed };
 }
