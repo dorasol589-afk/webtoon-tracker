@@ -134,8 +134,8 @@ export default function TagMetricTrendChart({
     }
     return mergeByDate(valueByTag, tagNames);
   }, [rawByTag, tagNames, granularity, mode, viewMode]);
-  const { range, containerRef, resetZoom, isZoomed } = useWheelZoom(chartData.length, 50, 20);
-  const visibleData = chartData.slice(range[0], range[1] + 1);
+  const { sliceRange, containerRef, resetZoom, isZoomed } = useWheelZoom(chartData.length, 50, 20);
+  const visibleData = chartData.slice(sliceRange[0], sliceRange[1] + 1);
 
   if (options.length === 0) {
     return (

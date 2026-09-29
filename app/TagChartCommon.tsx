@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import type { TagStatRow } from "@/lib/queries";
@@ -177,10 +177,15 @@ const MIN_VISIBLE_POINTS = 4;
  *
  * React의 onWheel prop으로 붙이면 브라우저가 wheel 리스너를 기본 passive로 등록해서
  * preventDefault()가 무시되고 페이지 전체가 같이 스크롤되는 문제가 실제로 있었다 - 컨테이너에
- * addEventListener(..., { passive: false })로 직접 붙여야 preventDefault가 먹는다. */
+ * addEventListener(..., { passive: false })로 직접 붙여야 preventDefault가 먹는다.
+ *
+ * 리스너를 `useEffect(..., [length, ...])`로 붙였을 때는 또 다른 버그가 있었다: 로딩 중엔 차트
+ * div 자체가 통째로 언마운트됐다가 데이터가 오면 새 div로 다시 마운트되는데, 태그를 바꿔도
+ * 우연히 기간 수(length)가 똑같이 나오면 effect가 재실행되지 않아 리스너가 이미 사라진 예전
+ * div에 붙은 채로 남아있었다(다른 태그 선택 시 휠 줌이 먹통되는 문제로 실제 확인됨). div가
+ * 마운트/언마운트될 때마다 확실히 다시 붙도록 콜백 ref로 직접 처리한다. */
 export function useWheelZoom(length: number, plotLeft: number, plotRight: number) {
   const [range, setRange] = useState<[number, number]>([0, Math.max(0, length - 1)]);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   // 데이터 길이가 바뀌면(태그/기간 변경 등) 줌 범위를 초기화 - effect 대신 렌더 중 상태 조정
   // 패턴(React 공식 권장)을 써서 매번 리렌더 후 추가로 setState가 도는 걸 피한다.
@@ -190,11 +195,21 @@ export function useWheelZoom(length: number, plotLeft: number, plotRight: number
     setRange([0, Math.max(0, length - 1)]);
   }
 
+  // 휠 핸들러 안에서 항상 최신 length/여백을 보도록 ref로 들고 있는다(콜백 ref 자체는
+  // 마운트마다 새로 만들지 않고 아래처럼 한 번만 만들어 재사용해야 클린업이 꼬이지 않는다).
+  const latest = useRef({ length, plotLeft, plotRight });
   useEffect(() => {
-    const el = containerRef.current;
+    latest.current = { length, plotLeft, plotRight };
+  }, [length, plotLeft, plotRight]);
+
+  const cleanupRef = useRef<(() => void) | null>(null);
+  const containerRef = useCallback((el: HTMLDivElement | null) => {
+    cleanupRef.current?.();
+    cleanupRef.current = null;
     if (!el) return;
 
     const onWheel = (e: globalThis.WheelEvent) => {
+      const { length, plotLeft, plotRight } = latest.current;
       if (length <= MIN_VISIBLE_POINTS) return;
       e.preventDefault();
       const rect = el.getBoundingClientRect();
@@ -221,18 +236,23 @@ export function useWheelZoom(length: number, plotLeft: number, plotRight: number
           newEnd = length - 1;
         }
         newStart = Math.max(0, newStart);
-        return [Math.round(newStart), Math.round(newEnd)];
+        return [newStart, newEnd];
       });
     };
 
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [length, plotLeft, plotRight]);
+    cleanupRef.current = () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   function resetZoom() {
     setRange([0, Math.max(0, length - 1)]);
   }
 
-  const isZoomed = range[0] > 0 || range[1] < length - 1;
-  return { range, containerRef, resetZoom, isZoomed };
+  // range는 확대가 아주 조금씩(휠 한 틱당 15%) 일어날 때도 누적되도록 소수 그대로 들고 있다가
+  // 실제 배열을 자를 때만 반올림한다 - 데이터가 몇 개 안 되는 태그(예: 6개짜리)는 반올림을 먼저
+  // 해버리면 한 틱의 변화폭이 반 칸도 안 돼서 매번 원래 정수로 다시 스냅되어 확대가 전혀 안
+  // 먹히는 문제가 있었다(적게 선택된 태그에서 휠 줌이 먹통되는 문제로 실제 확인됨).
+  const sliceRange: [number, number] = [Math.round(range[0]), Math.round(range[1])];
+  const isZoomed = sliceRange[0] > 0 || sliceRange[1] < length - 1;
+  return { sliceRange, containerRef, resetZoom, isZoomed };
 }
