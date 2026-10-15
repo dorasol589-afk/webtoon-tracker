@@ -8,6 +8,7 @@ import {
   getSeriesProductForTitle,
   getSeriesHistory,
   getTitleNotes,
+  getTitleGenres,
   getPopularityRankHistory,
   getNaverTitlesPerf,
   isTitleWatchlisted,
@@ -16,6 +17,7 @@ import SeriesDownloadChart from "./SeriesDownloadChart";
 import RevenueEstimateSection from "./RevenueEstimateSection";
 import PopularityRankChart from "./PopularityRankChart";
 import TitleNotesForm from "./TitleNotesForm";
+import ExpandableSynopsis from "./ExpandableSynopsis";
 import StudioNameEditor from "@/app/StudioNameEditor";
 import WatchlistToggle from "@/app/WatchlistToggle";
 import { hasAdminAccess } from "@/lib/supabase";
@@ -53,7 +55,7 @@ export default async function TitlePage({
   const cookieStore = await cookies();
   const watchlistUser = cookieStore.get(WATCHLIST_USER_COOKIE)?.value ?? null;
 
-  const [episodes, snapshot, seriesHistory, titleNotes, rankHistory, perfMap, watchlisted] = await Promise.all([
+  const [episodes, snapshot, seriesHistory, titleNotes, rankHistory, perfMap, watchlisted, genres] = await Promise.all([
     getEpisodesWithLatestCount(id),
     getLatestTitleSnapshot(id),
     seriesProduct ? getSeriesHistory(seriesProduct.productNo) : Promise.resolve([]),
@@ -61,6 +63,7 @@ export default async function TitlePage({
     getPopularityRankHistory(id),
     getNaverTitlesPerf([id]),
     watchlistUser ? isTitleWatchlisted(watchlistUser, id) : Promise.resolve(false),
+    getTitleGenres(id),
   ]);
   const perf = perfMap.get(id);
 
@@ -95,6 +98,15 @@ export default async function TitlePage({
             </a>
           </h1>
           <p className="text-sm text-neutral-500">{title.author}</p>
+          {genres.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {genres.map((g) => (
+                <span key={g} className="rounded bg-violet-100 px-2 py-0.5 text-xs text-violet-700">
+                  {g}
+                </span>
+              ))}
+            </div>
+          )}
           {title.is_new && (
             <span className="mt-1 mr-1 inline-block rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">
               신작
@@ -165,19 +177,7 @@ export default async function TitlePage({
               )}
             </div>
           )}
-          {title.synopsis && (
-            <details className="group mt-3 text-sm leading-relaxed text-neutral-700">
-              <summary className="list-none cursor-pointer marker:hidden [&::-webkit-details-marker]:hidden">
-                <p className="line-clamp-3 whitespace-pre-line group-open:line-clamp-none">
-                  {title.synopsis}
-                </p>
-                <span className="mt-1 inline-block text-xs text-blue-600 hover:underline">
-                  <span className="group-open:hidden">더보기</span>
-                  <span className="hidden group-open:inline">접기</span>
-                </span>
-              </summary>
-            </details>
-          )}
+          {title.synopsis && <ExpandableSynopsis text={title.synopsis} />}
         </div>
       </div>
 

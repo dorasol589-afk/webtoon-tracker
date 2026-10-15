@@ -312,7 +312,7 @@ export default async function RankingsPage({
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:items-start">
             <div>
               <div className="mb-3">
-                <h2 className="mb-2 text-sm font-semibold text-neutral-500">실시간 전체 랭킹 TOP5</h2>
+                <h2 className="mb-2 text-sm font-semibold text-neutral-500">네이버웹툰 실시간 전체 랭킹 TOP5</h2>
                 <div className="flex flex-wrap gap-1">
                   {GENDER_TABS.map((g) => (
                     <Link
@@ -443,7 +443,7 @@ export default async function RankingsPage({
             </div>
 
             <div>
-              <h2 className="mb-3 text-sm font-semibold text-neutral-500">실시간 신작랭킹 TOP5</h2>
+              <h2 className="mb-3 text-sm font-semibold text-neutral-500">네이버웹툰 실시간 신작랭킹 TOP5</h2>
               <ol className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
                 {result.newReleaseRanking.length === 0 && (
                   <li className="p-4 text-sm text-neutral-500">데이터 없음</li>

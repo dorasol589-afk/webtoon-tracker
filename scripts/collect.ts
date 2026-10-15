@@ -19,6 +19,7 @@ import {
   fetchRealtimeRanking,
   findLastEpisodeNoViaComments,
   fetchTitleInfo,
+  deriveStudioFromCpName,
   type RealtimeRankCategory,
 } from "../lib/naver";
 import { findAdultTitleLaunchDate } from "../lib/namu";
@@ -193,13 +194,16 @@ async function main() {
       origin_author: string | null;
       age_rating: string;
       is_novel_origin: boolean;
+      synopsis: string | null;
     }[] = [];
+    const cpNameByTitle = new Map<number, string>();
     let infoFailures = 0;
     await Promise.all(
       titles.map((title) =>
         infoLimit(async () => {
           try {
             const info = await fetchTitleInfo(title.titleId);
+            if (info.cpName) cpNameByTitle.set(title.titleId, info.cpName);
             for (const g of info.genres) tagRows.push({ title_id: title.titleId, tag_name: g, tag_type: "GENRE" });
             for (const k of info.keywords) tagRows.push({ title_id: title.titleId, tag_name: k, tag_type: "KEYWORD" });
             authorRows.push({
@@ -210,6 +214,7 @@ async function main() {
               origin_author: info.originAuthors.join(", ") || null,
               age_rating: info.ageRating,
               is_novel_origin: info.isNovelOrigin,
+              synopsis: info.synopsis,
             });
           } catch (err) {
             infoFailures++;
@@ -234,6 +239,30 @@ async function main() {
       const { error } = await supabase.from("titles").upsert(batch, { onConflict: "title_id" });
       if (error) console.error("  titles(작가정보) upsert 실패:", error.message);
     }
+    // 제작사: 아직 비어있는 작품(신작)만 cpName으로 채움 - 사람이 직접 고친 값은 덮어쓰지 않음
+    const emptyStudioIds = new Set<number>();
+    for (const idBatch of chunk([...cpNameByTitle.keys()], 500)) {
+      const { data } = await supabase
+        .from("titles")
+        .select("title_id,studio_name")
+        .in("title_id", idBatch);
+      for (const r of data ?? []) if (!r.studio_name) emptyStudioIds.add(r.title_id as number);
+    }
+    const studioGroups = new Map<string, { studioKey: string | null; ids: number[] }>();
+    for (const id of emptyStudioIds) {
+      const d = deriveStudioFromCpName(cpNameByTitle.get(id) as string);
+      const g = studioGroups.get(d.name);
+      if (g) g.ids.push(id);
+      else studioGroups.set(d.name, { studioKey: d.key, ids: [id] });
+    }
+    for (const [studioName, g] of studioGroups) {
+      const { error } = await supabase
+        .from("titles")
+        .update({ studio_name: studioName, studio_key: g.studioKey })
+        .in("title_id", g.ids);
+      if (error) console.error(`  제작사 채우기 실패 (${studioName}):`, error.message);
+    }
+    if (emptyStudioIds.size > 0) console.log(`  제작사 신규 채움 ${emptyStudioIds.size}건`);
     console.log(
       `  태그 ${dedupedTagRows.length}건, 작가정보 ${authorRows.length}건 저장 (조회 실패 ${infoFailures}건)`
     );
@@ -919,6 +948,7 @@ async function main() {
                 origin_author: info.originAuthors.join(", ") || null,
                 age_rating: info.ageRating,
                 is_novel_origin: info.isNovelOrigin,
+                synopsis: info.synopsis,
               },
               { onConflict: "title_id" }
             );

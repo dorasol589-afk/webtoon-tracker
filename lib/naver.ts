@@ -408,6 +408,9 @@ export interface TitleInfo {
   keywords: string[];
   ageRating: string;
   isNovelOrigin: boolean;
+  synopsis: string | null;
+  /** gfpAdCustomParam.cpName (예: "대원_작품명") - 제작사 추정용 */
+  cpName: string;
 }
 
 interface ArticleListInfoFullResponse {
@@ -415,6 +418,29 @@ interface ArticleListInfoFullResponse {
   publishDayOfWeekList?: string[];
   curationTagList?: { tagName: string; curationType: string }[];
   age?: { type: string; description?: string };
+  synopsis?: string;
+  gfpAdCustomParam?: { cpName?: string };
+}
+
+const COMPANY_WORDS = ["주식회사", "스튜디오", "코믹스", "출판", "프로덕션", "미디어", "컴퍼니", "북스", "프레스", "캔버스", "크리에이티브", "아트", "기획", "본부", "툰"];
+
+/** 괄호 안(필명)을 뺀 나머지에 회사 단어가 있거나 "(주)"로 시작하면 회사명 */
+export function looksLikeCompany(key: string): boolean {
+  if (key.startsWith("(주)")) return true;
+  const outside = key.replace(/[(（][^)）]*[)）]/g, "");
+  return COMPANY_WORDS.some((w) => outside.includes(w));
+}
+
+/** cpName(예: "대원_작품명")에서 제작사 도출 - 언더스코어 없으면 개인 작가, "다중"으로 시작하면 협업 */
+export function deriveStudioFromCpName(cpName: string): { key: string | null; name: string } {
+  if (cpName.startsWith("다중")) return { key: null, name: "다중" };
+  const idx = cpName.indexOf("_");
+  if (idx === -1) return { key: null, name: "개인" };
+  const key = cpName.slice(0, idx);
+  // "홍길동(필명)_작품명"처럼 괄호가 든 건 작가 개인(필명) 표기 - 단, 앞부분에 회사명(주식회사/스튜디오 등)이
+  // 들어있으면 "주식회사어반아트(하일권)"처럼 회사 + 담당 작가 표기라 회사로 둔다
+  if (/[(（].*[)）]/.test(key) && !looksLikeCompany(key)) return { key: null, name: "개인" };
+  return { key, name: key };
 }
 
 /** 작품 상세(글/그림/원작 작가, 연재요일, 장르/키워드 태그) - 매일 수집기와 단건 엑셀 내보내기가 공유 */
@@ -452,6 +478,8 @@ export async function fetchTitleInfo(titleId: number): Promise<TitleInfo> {
     keywords,
     ageRating,
     isNovelOrigin,
+    synopsis: data.synopsis?.trim() || null,
+    cpName: data.gfpAdCustomParam?.cpName ?? "",
   };
 }
 

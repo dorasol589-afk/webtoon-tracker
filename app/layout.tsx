@@ -35,7 +35,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                 관심작품
               </Link>
               <Link href="/rankings" className="hover:text-neutral-900">
-                실시간 랭킹
+                네이버웹툰
               </Link>
               <Link href="/kakao" className="hover:text-neutral-900">
                 카카오웹툰
