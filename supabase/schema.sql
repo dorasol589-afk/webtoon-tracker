@@ -33,6 +33,14 @@ alter table titles add column if not exists is_new boolean not null default fals
 -- null이면 아직 백필 전 (수집기가 새벽 3:10~8:10 예산 안에서 이어서 처리).
 alter table titles add column if not exists finished_backfilled_at timestamptz;
 
+-- 완결 시점(날짜). 수집기가 연재중->완결로 바뀐 걸 처음 본 날, 또는 과거 완결작은 마지막 회차 서비스일로 채움.
+-- 완결 후 90일 동안만 일일 수집(댓글수/시리즈 다운로드수)을 이어가고 이후엔 종료한다.
+alter table titles add column if not exists finished_at date;
+
+-- 일일 수집이 끝난(완결 후 90일 경과/과거 완결작) 작품의 마지막 총댓글수. comment_snapshots는 매일 최신 날짜
+-- 기준으로만 합산하는데 완결작은 더 이상 매일 쌓이지 않으므로, 목록/상세에선 이 값으로 대체해 보여준다.
+alter table titles add column if not exists final_comment_total bigint;
+
 -- 네이버 시리즈(series.naver.com) 다운로드수 자동 매칭 시도 여부. null이면 아직 시도 안 함 -
 -- 수집기가 매일 밤 이 값이 null인 작품만 새로 매칭 시도해서, 신작이 올라오면 자동으로
 -- 시리즈에 연결되고(매칭 성공시 series_products에 저장) 매일 똑같이 실패하는 작품을 계속
@@ -192,6 +200,10 @@ create table if not exists series_products (
 );
 
 create index if not exists idx_series_products_title on series_products (title_id);
+
+-- 과거 완결작의 다운로드수를 "현재 시점 1회"만 채운 경우 true. 하루짜리 스냅샷이라 장르별 누적 추이(genre_download_series)에
+-- 넣으면 그날 갑자기 폭증한 것처럼 보이므로 거기선 제외한다.
+alter table series_products add column if not exists one_time boolean not null default false;
 
 -- 시리즈 작품의 누적 다운로드수 일일 스냅샷 (product_no는 series_products에 먼저 등록되어 있어야 함,
 -- 이미 생성된 테이블이라 FK는 걸지 않고 애플리케이션 레벨에서 순서를 보장)
@@ -557,7 +569,7 @@ as $$
     twr.title_id, ti.title_name, ti.thumbnail_url, twr.popularity_rank, ti.is_novel_origin,
     coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
     sl.download_count,
-    ct.total_comment_count,
+    coalesce(ct.total_comment_count, ti.final_comment_total)::bigint as total_comment_count,
     ts.star_score
   from title_weekday_ranks twr
   join latest on twr.snapshot_date = latest.snapshot_date
@@ -645,7 +657,7 @@ as $$
         (select min(e.service_date) from episodes e where e.title_id = ti.title_id),
         ti.first_seen_at::date
       ) as launch_date,
-      ct.total_comment_count,
+      coalesce(ct.total_comment_count, ti.final_comment_total)::bigint as total_comment_count,
       ti.is_novel_origin,
       sl.download_count
     from titles ti
@@ -765,7 +777,7 @@ as $$
       coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
       ts.popularity_rank,
       ts.star_score,
-      ct.total_comment_count as comment_count,
+      coalesce(ct.total_comment_count, ti.final_comment_total)::bigint as comment_count,
       null::bigint as view_count,
       null::bigint as like_count,
       sl.download_count
@@ -929,7 +941,7 @@ as $$
     ts.weekday, ts.popularity_rank, ts.star_score,
     sl.download_count,
     coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
-    ct.total_comment_count
+    coalesce(ct.total_comment_count, ti.final_comment_total)::bigint as total_comment_count
   from titles ti
   left join title_snapshots ts
     on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from latest)
@@ -1026,7 +1038,7 @@ as $$
     sl.download_count, ti.is_novel_origin,
     ts.weekday,
     coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
-    ct.total_comment_count,
+    coalesce(ct.total_comment_count, ti.final_comment_total)::bigint as total_comment_count,
     ts.star_score
   from titles ti
   join series_latest sl on sl.title_id = ti.title_id
@@ -1153,7 +1165,7 @@ as $$
       coalesce(sa.canonical_name, ti.studio_name) as studio_name,
       ti.is_finished, ti.is_on_hiatus, ts.star_score, ts.popularity_rank,
       coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
-      ct.total_comment_count,
+      coalesce(ct.total_comment_count, ti.final_comment_total)::bigint as total_comment_count,
       sl.download_count,
       null::bigint as view_count,
       null::bigint as like_count,
@@ -1514,7 +1526,7 @@ as $$
     ts.weekday, ts.popularity_rank,
     coalesce(nl.launch_date, ti.first_seen_at::date) as launch_date,
     sl.download_count,
-    ct.total_comment_count,
+    coalesce(ct.total_comment_count, ti.final_comment_total)::bigint as total_comment_count,
     ts.star_score
   from titles ti
   left join title_snapshots ts on ts.title_id = ti.title_id and ts.snapshot_date = (select snapshot_date from naver_latest)
@@ -1571,10 +1583,14 @@ language sql
 stable
 as $$
   with dates as (
-    select distinct snapshot_date from series_snapshots where title_id = any(target_ids)
+    select distinct snapshot_date from series_snapshots
+    where title_id = any(target_ids)
+      and title_id not in (select title_id from series_products where one_time)
   ),
   tds as (
-    select distinct title_id from series_snapshots where title_id = any(target_ids)
+    select distinct title_id from series_snapshots
+    where title_id = any(target_ids)
+      and title_id not in (select title_id from series_products where one_time)
   ),
   grid as (
     select tds.title_id, dates.snapshot_date

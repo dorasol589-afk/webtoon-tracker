@@ -50,6 +50,15 @@ function getKstDateString(): string {
   return `${y}-${m}-${d}`;
 }
 
+// 완결 후 이 기간(일) 동안만 댓글수/시리즈 다운로드수를 매일 수집하고 이후엔 종료한다 - 완결 시점 성과를 보기 위함
+const FINISHED_TRACK_DAYS = 90;
+
+function shiftDateString(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 // 오늘 KST 기준 hour:minute 시각을 실제 epoch ms로 환산 (완결작 백필 시간 예산 마감 계산용)
 function getKstDeadlineTimestamp(hour: number, minute: number): number {
   const now = new Date();
@@ -136,10 +145,27 @@ async function main() {
   const finishedListRaw = await fetchAllFinishedTitles();
   const ongoingIds = new Set(ongoingTitles.map((t) => t.titleId));
   const hiatusNotFinished = finishedListRaw.filter((t) => !t.finish && !ongoingIds.has(t.titleId));
-  const allTitles = [...ongoingTitles, ...hiatusNotFinished];
+  // 완결 후 FINISHED_TRACK_DAYS일 이내인 작품은 완결이어도 계속 일일 수집 대상에 포함한다(finished_at 기준).
+  // 이 기간이 지나면 자동으로 빠져서 수집이 종료된다.
+  const finishedCutoff = shiftDateString(snapshotDate, -FINISHED_TRACK_DAYS);
+  let recentFinished: typeof finishedListRaw = [];
+  if (hasDb) {
+    const { getSupabaseAdmin } = await import("../lib/supabase");
+    const { data, error } = await getSupabaseAdmin()
+      .from("titles")
+      .select("title_id")
+      .eq("is_finished", true)
+      .gte("finished_at", finishedCutoff)
+      .limit(1000);
+    if (error) console.error("  최근 완결작 조회 실패:", error.message);
+    const recentIds = new Set((data ?? []).map((r) => r.title_id as number));
+    recentFinished = finishedListRaw.filter((t) => t.finish && recentIds.has(t.titleId) && !ongoingIds.has(t.titleId));
+  }
+  const recentFinishedIds = new Set(recentFinished.map((t) => t.titleId));
+  const allTitles = [...ongoingTitles, ...hiatusNotFinished, ...recentFinished];
   const titles = titleLimit ? allTitles.slice(0, titleLimit) : allTitles;
   console.log(
-    `  요일별 연재작 ${ongoingTitles.length}개 + 휴재중(완결 아님) ${hiatusNotFinished.length}개 = ${allTitles.length}개 중 ${titles.length}개 처리 대상${titleLimit ? " (TITLE_LIMIT 적용)" : ""}`
+    `  요일별 연재작 ${ongoingTitles.length}개 + 휴재중(완결 아님) ${hiatusNotFinished.length}개 + 완결 후 ${FINISHED_TRACK_DAYS}일 이내 ${recentFinished.length}개 = ${allTitles.length}개 중 ${titles.length}개 처리 대상${titleLimit ? " (TITLE_LIMIT 적용)" : ""}`
   );
 
   let supabase: ReturnType<typeof import("../lib/supabase").getSupabaseAdmin> | null = null;
@@ -514,6 +540,26 @@ async function main() {
       if (error) console.error("  comment_snapshots upsert 실패:", error.message);
     }
     console.log(`  Supabase에 ${dedupedSnapshots.length}건 저장 완료`);
+    // 완결 후 추적 중인 작품은 매일 마지막 총댓글수를 titles에 남겨둔다 - 추적 기간이 끝난 뒤에도
+    // 목록/상세에서 "완결 시점 성과"를 계속 보여주기 위함(comment_snapshots는 최신 날짜분만 합산하므로)
+    if (recentFinishedIds.size > 0) {
+      const finalTotals = new Map<number, number>();
+      for (const snap of dedupedSnapshots) {
+        if (recentFinishedIds.has(snap.title_id)) {
+          finalTotals.set(snap.title_id, (finalTotals.get(snap.title_id) ?? 0) + snap.comment_count);
+        }
+      }
+      const totalsLimit = pLimit(10);
+      await Promise.all(
+        [...finalTotals.entries()].map(([titleId, total]) =>
+          totalsLimit(async () => {
+            const { error } = await supabase.from("titles").update({ final_comment_total: total }).eq("title_id", titleId);
+            if (error) console.error(`  final_comment_total 갱신 실패 (titleId=${titleId}):`, error.message);
+          })
+        )
+      );
+      console.log(`  완결 후 추적 중인 ${finalTotals.size}개 작품의 총댓글수 갱신`);
+    }
   } else {
     console.log("  드라이런 모드 - 샘플 20건 출력:");
     const byComment = [...dedupedSnapshots].sort((a, b) => b.comment_count - a.comment_count);
@@ -531,12 +577,16 @@ async function main() {
   // 성공/실패 상관없이 시도했으면 checked_at을 찍어서 매번 똑같이 실패하는 작품을 계속
   // 재검색하지 않게 함(네트워크 오류로 시도 자체가 실패한 건 checked_at을 찍지 않고 다음날 재시도).
   if (supabase) {
-    // 완결작은 다운로드수 추적 대상이 아니므로 애초에 매칭 시도도 하지 않음
+    // 완결 후 기간이 지난 작품은 다운로드수 추적 대상이 아니므로 매칭 시도도 하지 않음(최근 완결작은 포함)
     const unchecked = await fetchAllRows<{ title_id: number; title_name: string }>(
       supabase,
       "titles",
       "title_id,title_name",
-      (q) => q.eq("is_active", true).eq("is_finished", false).is("series_match_checked_at", null)
+      (q) =>
+        q
+          .eq("is_active", true)
+          .or(`is_finished.eq.false,finished_at.gte.${finishedCutoff}`)
+          .is("series_match_checked_at", null)
     );
     if (unchecked && unchecked.length > 0) {
       console.log(`  시리즈 미확인 작품 ${unchecked.length}개 자동 매칭 시도...`);
@@ -579,10 +629,10 @@ async function main() {
     seriesTargets.set(item.productNo, { titleId: item.titleId, name: item.name });
   }
   if (supabase) {
-    // 완결작은 다운로드수 추적 대상에서 제외 (연재중/휴재중만) - 매칭된 뒤에 완결되는 경우도 있어
-    // series_products가 아니라 titles.is_finished 기준으로 매번 걸러냄
+    // 다운로드수 추적 대상: 연재중/휴재중 + 완결 후 FINISHED_TRACK_DAYS일 이내. 매칭된 뒤에 완결되는 경우도 있어
+    // series_products가 아니라 titles 기준으로 매번 걸러냄
     const nonFinished = await fetchAllRows<{ title_id: number }>(supabase, "titles", "title_id", (q) =>
-      q.eq("is_active", true).eq("is_finished", false)
+      q.eq("is_active", true).or(`is_finished.eq.false,finished_at.gte.${finishedCutoff}`)
     );
     const nonFinishedIds = new Set(nonFinished.map((t) => t.title_id));
     const products = await fetchAllRows<{ product_no: number; title_id: number; series_title_name: string }>(
@@ -807,10 +857,23 @@ async function main() {
       is_new: t.new,
       last_seen_at: nowIso,
     }));
+    // 이번에 처음 완결로 바뀐(또는 처음 본) 작품은 오늘을 완결일로 기록 - 이날부터 FINISHED_TRACK_DAYS일 추적.
+    // 이미 완결로 저장돼 있던 작품(과거 완결작)은 건드리지 않는다.
+    const alreadyFinished = new Set<number>();
+    for (const idBatch of chunk(finishedRows.map((r) => r.title_id), 300)) {
+      const { data } = await supabase.from("titles").select("title_id").in("title_id", idBatch).eq("is_finished", true);
+      for (const r of data ?? []) alreadyFinished.add(r.title_id as number);
+    }
     for (const batch of chunk(finishedRows, 500)) {
       const { error } = await supabase.from("titles").upsert(batch, { onConflict: "title_id" });
       if (error) console.error("  완결작 titles upsert 실패:", error.message);
     }
+    const newlyFinishedIds = finishedRows.map((r) => r.title_id).filter((id) => !alreadyFinished.has(id));
+    for (const idBatch of chunk(newlyFinishedIds, 300)) {
+      const { error } = await supabase.from("titles").update({ finished_at: snapshotDate }).in("title_id", idBatch);
+      if (error) console.error("  finished_at 기록 실패:", error.message);
+    }
+    if (newlyFinishedIds.length > 0) console.log(`  새로 완결된 작품 ${newlyFinishedIds.length}개 - 오늘부터 ${FINISHED_TRACK_DAYS}일간 추적`);
 
     const episodeLimitFinished = pLimit(4);
     const commentLimitFinished = pLimit(8);
