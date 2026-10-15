@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 
 export default async function StatsPage() {
   const [genreStats, keywordStats] = await Promise.all([
-    getTagStats("GENRE", 40),
-    getTagStats("KEYWORD", 500),
+    getTagStats("GENRE", 40, true),
+    getTagStats("KEYWORD", 500, true),
   ]);
 
   return (

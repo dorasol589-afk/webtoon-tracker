@@ -1509,9 +1509,10 @@ export interface TagStatRow {
 }
 
 /** 장르/키워드별 통계 (연재중인 작품 기준, 작품 수 많은 순) - 네이버 태그(article/list/info) 그대로 집계 */
-export async function getTagStats(tagType: TagType, limit = 15): Promise<TagStatRow[]> {
+/** includeFinished=true면 완결/휴재 작품까지 센다(통계 탭 - 런칭 추이 그래프와 같은 기준). 기본은 연재중만. */
+export async function getTagStats(tagType: TagType, limit = 15, includeFinished = false): Promise<TagStatRow[]> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase.rpc("tag_stats", {
+  const { data, error } = await supabase.rpc(includeFinished ? "tag_stats_all" : "tag_stats", {
     tag_type_filter: tagType,
     result_limit: limit,
   });

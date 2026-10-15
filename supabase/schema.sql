@@ -1053,6 +1053,24 @@ $$;
 
 -- 장르/키워드 통계: 진짜 연재중인(완결/휴재 제외) 작품 중 해당 태그가 붙은 작품 수 상위 N개.
 -- tag_type_filter: 'GENRE' | 'KEYWORD'
+-- 통계 탭용: tag_stats와 같지만 완결/휴재 작품까지 포함해서 센다(네이버 태그 검색 결과 개수와 같은 기준).
+-- 런칭 추이 그래프가 완결작까지 포함해 그리므로 태그 선택창의 개수도 같은 기준이어야 맞는다.
+create or replace function tag_stats_all(tag_type_filter text, result_limit int default 15)
+returns table (tag_name text, title_count bigint)
+language sql
+stable
+as $
+  select tt.tag_name, count(*) as title_count
+  from title_tags tt
+  join titles ti on ti.title_id = tt.title_id
+  where ti.is_active = true
+    and tt.tag_type = tag_type_filter
+  group by tt.tag_name
+  order by title_count desc, tt.tag_name asc
+  limit result_limit;
+$;
+grant execute on function tag_stats_all(text, int) to anon;
+
 create or replace function tag_stats(tag_type_filter text, result_limit int default 15)
 returns table (tag_name text, title_count bigint)
 language sql
