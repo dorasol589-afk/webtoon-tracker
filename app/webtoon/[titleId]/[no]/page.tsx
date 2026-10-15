@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getTitle, getEpisode, getEpisodeHistory, getEpisodeTreatment } from "@/lib/queries";
+import { getTitle, getEpisode, getEpisodeHistory, getEpisodeTreatment, getLatestTitleSnapshot } from "@/lib/queries";
 import { hasAdminAccess } from "@/lib/supabase";
 import CommentTrendChart from "./CommentTrendChart";
 import TreatmentCell from "../TreatmentCell";
@@ -17,11 +17,12 @@ export default async function EpisodePage({
   const episodeNo = Number(no);
   if (!Number.isInteger(id) || !Number.isInteger(episodeNo)) notFound();
 
-  const [title, episode, history, treatment] = await Promise.all([
+  const [title, episode, history, treatment, titleSnapshot] = await Promise.all([
     getTitle(id),
     getEpisode(id, episodeNo),
     getEpisodeHistory(id, episodeNo),
     getEpisodeTreatment(id, episodeNo),
+    getLatestTitleSnapshot(id),
   ]);
   if (!title || !episode) notFound();
 
@@ -44,7 +45,7 @@ export default async function EpisodePage({
         )}
       </p>
 
-      <CommentTrendChart data={history} />
+      <CommentTrendChart data={history} seriesWeekday={titleSnapshot?.weekday} />
 
       <div className="mt-6">
         <h2 className="mb-2 text-sm font-semibold text-neutral-500">트리트먼트</h2>
