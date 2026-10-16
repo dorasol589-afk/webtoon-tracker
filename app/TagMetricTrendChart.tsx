@@ -12,7 +12,7 @@ import {
   toDeltaSeries,
 } from "@/lib/seriesTrend";
 import { formatWon } from "@/lib/format";
-import { TagPicker, TagLegend, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
+import { TagPicker, TagLegend, MetricTooltip, ManyLinesLayer, ManyMetricTooltip, MANY_LINES, computeYDomain, orderedTagEntries, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
 
 const PRICE_PER_DOWNLOAD = 300;
 
@@ -146,6 +146,9 @@ export default function TagMetricTrendChart({
   }
 
   const xLabelFormatter = xLabelFor(granularity);
+  const many = tagNames.length > MANY_LINES;
+  const entries = orderedTagEntries(tagNames, activeTag);
+  const yDomain: [number, number | string] = many ? computeYDomain(visibleData, tagNames) : [0, "auto"];
   const valueFormatter = mode === "revenue" ? formatWon : (v: number) => v.toLocaleString();
 
   return (
@@ -247,31 +250,62 @@ export default function TagMetricTrendChart({
               <LineChart data={visibleData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
                 <XAxis dataKey="snapshot_date" tick={{ fontSize: 10 }} tickFormatter={xLabelFormatter} />
-                <YAxis tick={{ fontSize: 11 }} width={50} domain={[0, "auto"]} tickFormatter={(v) => valueFormatter(Number(v))} />
+                <YAxis tick={{ fontSize: 11 }} width={50} domain={yDomain} tickFormatter={(v) => valueFormatter(Number(v))} />
                 <Tooltip
-                  content={(props) => (
-                    <MetricTooltip
-                      {...props}
-                      activeTag={activeTag}
-                      valueFormatter={valueFormatter}
-                      label={typeof props.label === "string" ? xLabelFormatter(props.label) : props.label}
-                    />
-                  )}
+                  isAnimationActive={false}
+                  content={(props) =>
+                    many ? (
+                      <ManyMetricTooltip
+                        active={props.active}
+                        label={props.label}
+                        rows={visibleData}
+                        xKey="snapshot_date"
+                        entries={entries}
+                        activeTag={activeTag}
+                        valueFormatter={valueFormatter}
+                        labelFormatter={xLabelFormatter}
+                      />
+                    ) : (
+                      <MetricTooltip
+                        {...props}
+                        activeTag={activeTag}
+                        valueFormatter={valueFormatter}
+                        label={typeof props.label === "string" ? xLabelFormatter(props.label) : props.label}
+                      />
+                    )
+                  }
                 />
-                {tagNames.map((tagName, idx) => (
-                  <Line
-                    key={tagName}
-                    type="monotone"
-                    dataKey={tagName}
-                    name={tagName}
-                    stroke={colorForTag(idx, tagName, activeTag)}
-                    strokeWidth={activeTag === tagName ? 3 : 1.5}
-                    dot={false}
-                    connectNulls
-                    style={{ cursor: "pointer" }}
-                    onClick={() => toggleActive(tagName)}
-                  />
-                ))}
+                {many ? (
+                  <>
+                    {/* recharts는 선(<Line>)이 하나도 없으면 축을 아예 그리지 않는다 - 축만 살리려고 안 보이는 선 하나를 둔다 */}
+                    <Line dataKey={tagNames[0]} stroke="transparent" dot={false} activeDot={false} isAnimationActive={false} legendType="none" />
+                    <ManyLinesLayer
+                      rows={visibleData}
+                      xKey="snapshot_date"
+                      entries={entries}
+                      activeTag={activeTag}
+                      onToggle={toggleActive}
+                      connectNulls
+                    />
+                  </>
+                ) : (
+                  entries.map(({ name: tagName, idx }) => (
+                    <Line
+                      // 강조된 선은 key를 바꿔 다시 마운트시켜서(recharts는 마운트 순서대로 그림) 맨 앞에 그려지게 한다
+                      key={activeTag === tagName ? `${tagName}*` : tagName}
+                      type="monotone"
+                      dataKey={tagName}
+                      name={tagName}
+                      stroke={colorForTag(idx, tagName, activeTag)}
+                      strokeWidth={activeTag === tagName ? 3 : activeTag ? 1 : 1.5}
+                      dot={false}
+                      isAnimationActive={false}
+                      connectNulls
+                      style={{ cursor: "pointer" }}
+                      onClick={() => toggleActive(tagName)}
+                    />
+                  ))
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>

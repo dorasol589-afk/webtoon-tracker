@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { TooltipContentProps } from "recharts";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { usePlotArea, useXAxisScale, useYAxisScale, type TooltipContentProps } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import type { TagStatRow } from "@/lib/queries";
 import { COMPARISON_COLORS } from "@/lib/chartColors";
@@ -11,6 +11,149 @@ const TOOLTIP_MAX_ROWS = 8;
 
 export function colorForTag(idx: number, tagName: string, activeTag: string | null): string {
   return activeTag === null || activeTag === tagName ? COMPARISON_COLORS[idx % COMPARISON_COLORS.length] : INACTIVE_COLOR;
+}
+
+/** 선이 이 개수를 넘으면(키워드 전체 선택 등) 렌더 비용을 줄이는 모드로 전환 - 곡선 보간 대신 직선, hover 점 생략 */
+export const MANY_LINES = 30;
+
+/** 강조 중인 태그를 맨 마지막(=맨 앞에 그려짐)으로 보낸다. 색 인덱스(idx)는 원래 순서 그대로 유지.
+ * recharts는 자식 순서대로 그리기 때문에 순서를 바꾸지 않으면 강조한 선이 수백 개 선 아래에 묻힌다. */
+export function orderedTagEntries(tagNames: string[], activeTag: string | null): { name: string; idx: number }[] {
+  const entries = tagNames.map((name, idx) => ({ name, idx }));
+  if (!activeTag) return entries;
+  return [...entries.filter((e) => e.name !== activeTag), ...entries.filter((e) => e.name === activeTag)];
+}
+
+type Row = Record<string, string | number | null>;
+
+function niceCeil(v: number): number {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  const m = v / p;
+  const n = m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10;
+  return n * p;
+}
+
+/** 선이 많을 때는 recharts 대신 우리가 직접 선을 그리기 때문에(아래 ManyLinesLayer) recharts가 데이터로 축 범위를
+ * 자동 계산해주지 못한다 - 보이는 구간의 최대/최소로 "깔끔한" Y축 범위를 직접 계산한다. */
+export function computeYDomain(rows: Row[], tagNames: string[]): [number, number] {
+  let max = 0;
+  let min = 0;
+  for (const row of rows) {
+    for (const t of tagNames) {
+      const v = row[t];
+      if (typeof v === "number") {
+        if (v > max) max = v;
+        if (v < min) min = v;
+      }
+    }
+  }
+  return [min < 0 ? -niceCeil(-min) : 0, niceCeil(max)];
+}
+
+/** recharts의 <Line>은 선 하나마다 내부 스토어에 등록/재계산돼서 300개쯤 되면 한 번 그릴 때 수 초가 걸린다(확대·강조
+ * 클릭마다 렉). 선이 많을 땐 <path> 하나씩만 직접 그리는 가벼운 레이어로 대체한다. 이 방식은 SVG 자식 순서대로
+ * 그려지므로 강조된 선을 맨 마지막(맨 앞)에 놓을 수 있다. 좌표는 recharts 축의 scale을 그대로 써서 맞춘다. */
+export function ManyLinesLayer({
+  rows,
+  xKey,
+  entries,
+  activeTag,
+  onToggle,
+  connectNulls = false,
+}: {
+  rows: Row[];
+  xKey: string;
+  entries: { name: string; idx: number }[];
+  activeTag: string | null;
+  onToggle: (tagName: string) => void;
+  connectNulls?: boolean;
+}) {
+  const xScale = useXAxisScale();
+  const yScale = useYAxisScale();
+  const plot = usePlotArea();
+  const clipId = useId();
+  if (!xScale || !yScale || !plot) return null;
+  const xs = rows.map((r) => xScale(r[xKey] as never) as number | undefined);
+
+  return (
+    <g>
+      <clipPath id={clipId}>
+        <rect x={plot.x} y={plot.y} width={plot.width} height={plot.height} />
+      </clipPath>
+      <g clipPath={`url(#${clipId})`} fill="none" strokeLinejoin="round" strokeLinecap="round">
+        {entries.map(({ name, idx }) => {
+          let d = "";
+          let pen = false;
+          for (let i = 0; i < rows.length; i++) {
+            const v = rows[i][name];
+            const x = xs[i];
+            if (typeof v !== "number" || x === undefined || Number.isNaN(x)) {
+              if (!connectNulls) pen = false;
+              continue;
+            }
+            const y = yScale(v as never) as number | undefined;
+            if (y === undefined || Number.isNaN(y)) continue;
+            d += `${pen ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
+            pen = true;
+          }
+          if (!d) return null;
+          return (
+            <path
+              key={name}
+              d={d}
+              stroke={colorForTag(idx, name, activeTag)}
+              strokeWidth={activeTag === name ? 3 : activeTag ? 1 : 1.5}
+              style={{ cursor: "pointer" }}
+              onClick={() => onToggle(name)}
+            />
+          );
+        })}
+      </g>
+    </g>
+  );
+}
+
+/** 선이 많은 모드(ManyLinesLayer)에선 recharts가 series를 모르므로 Tooltip의 payload가 비어있다 - hover한 x 위치의
+ * 행을 직접 찾아 MetricTooltip이 쓰는 형식으로 만들어서 넘겨준다. */
+export function ManyMetricTooltip({
+  active,
+  label,
+  rows,
+  xKey,
+  entries,
+  activeTag,
+  valueFormatter,
+  labelFormatter,
+}: {
+  active?: boolean;
+  label?: string | number;
+  rows: Row[];
+  xKey: string;
+  entries: { name: string; idx: number }[];
+  activeTag: string | null;
+  valueFormatter?: (value: number) => string;
+  labelFormatter?: (label: string) => string;
+}) {
+  if (!active) return null;
+  const row = rows.find((r) => r[xKey] === label);
+  if (!row) return null;
+  const payload = entries
+    .filter(({ name }) => typeof row[name] === "number")
+    .map(({ name, idx }) => ({
+      dataKey: name,
+      name,
+      value: row[name] as number,
+      color: colorForTag(idx, name, activeTag),
+    }));
+  const shownLabel = typeof label === "string" && labelFormatter ? labelFormatter(label) : label;
+  return (
+    <MetricTooltip
+      {...({ active: true, label: shownLabel, payload } as unknown as TooltipContentProps<ValueType, NameType>)}
+      activeTag={activeTag}
+      valueFormatter={valueFormatter}
+    />
+  );
 }
 
 export function MetricTooltip({
@@ -236,6 +379,10 @@ export function useWheelZoom(length: number, plotLeft: number, plotRight: number
   }, [length, plotLeft, plotRight]);
 
   const cleanupRef = useRef<(() => void) | null>(null);
+  // 트랙패드/휠은 짧은 시간에 이벤트가 수십 번 몰아치는데, 이벤트마다 차트를 다시 그리면(선이 많을 때) 렉이 심하다 -
+  // 확대 배율만 누적해뒀다가 다음 화면 갱신 시점(requestAnimationFrame)에 한 번만 적용한다.
+  const pendingRef = useRef<{ factor: number; fraction: number } | null>(null);
+  const rafRef = useRef<number | null>(null);
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     cleanupRef.current?.();
     cleanupRef.current = null;
@@ -251,30 +398,46 @@ export function useWheelZoom(length: number, plotLeft: number, plotRight: number
       const fraction = Math.min(1, Math.max(0, xInPlot / plotWidth));
 
       const zoomFactor = e.deltaY < 0 ? 0.85 : 1 / 0.85;
-      // 함수형 업데이트를 써서 트랙패드처럼 휠 이벤트가 짧은 시간에 여러 번 몰아쳐도(리액트가
-      // 아직 커밋 전이라도) 매번 직전 range를 정확히 이어받아 계산한다.
-      setRange(([start, end]) => {
-        const curLength = end - start;
-        const cursorIndex = start + fraction * curLength;
-        const newLength = Math.min(length - 1, Math.max(MIN_VISIBLE_POINTS - 1, curLength * zoomFactor));
+      const pending = pendingRef.current ?? { factor: 1, fraction };
+      pending.factor *= zoomFactor;
+      pending.fraction = fraction;
+      pendingRef.current = pending;
+      if (rafRef.current !== null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        const p = pendingRef.current;
+        pendingRef.current = null;
+        if (!p) return;
+        const len = latest.current.length;
+        // 함수형 업데이트로 항상 직전 range를 이어받아 계산한다.
+        setRange(([start, end]) => {
+          const curLength = end - start;
+          const cursorIndex = start + p.fraction * curLength;
+          const newLength = Math.min(len - 1, Math.max(MIN_VISIBLE_POINTS - 1, curLength * p.factor));
 
-        let newStart = cursorIndex - fraction * newLength;
-        let newEnd = newStart + newLength;
-        if (newStart < 0) {
-          newEnd -= newStart;
-          newStart = 0;
-        }
-        if (newEnd > length - 1) {
-          newStart -= newEnd - (length - 1);
-          newEnd = length - 1;
-        }
-        newStart = Math.max(0, newStart);
-        return [newStart, newEnd];
+          let newStart = cursorIndex - p.fraction * newLength;
+          let newEnd = newStart + newLength;
+          if (newStart < 0) {
+            newEnd -= newStart;
+            newStart = 0;
+          }
+          if (newEnd > len - 1) {
+            newStart -= newEnd - (len - 1);
+            newEnd = len - 1;
+          }
+          newStart = Math.max(0, newStart);
+          return [newStart, newEnd];
+        });
       });
     };
 
     el.addEventListener("wheel", onWheel, { passive: false });
-    cleanupRef.current = () => el.removeEventListener("wheel", onWheel);
+    cleanupRef.current = () => {
+      el.removeEventListener("wheel", onWheel);
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      pendingRef.current = null;
+    };
   }, []);
 
   function resetZoom() {

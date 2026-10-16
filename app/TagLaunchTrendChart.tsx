@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { TagStatRow, TagType } from "@/lib/queries";
-import { TagPicker, TagLegend, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
+import { TagPicker, TagLegend, MetricTooltip, ManyLinesLayer, ManyMetricTooltip, MANY_LINES, computeYDomain, orderedTagEntries, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
 
 type Granularity = "year" | "quarter" | "month";
 
@@ -150,6 +150,10 @@ export default function TagLaunchTrendChart({
   const { sliceRange, containerRef, resetZoom, isZoomed } = useWheelZoom(chartData.length, 30, 20);
   const visibleData = chartData.slice(sliceRange[0], sliceRange[1] + 1);
 
+  const many = tagNames.length > MANY_LINES;
+  const entries = orderedTagEntries(tagNames, activeTag);
+  const yDomain = many ? computeYDomain(visibleData, tagNames) : undefined;
+
   if (options.length === 0) {
     return (
       <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500">
@@ -241,21 +245,47 @@ export default function TagLaunchTrendChart({
               <LineChart data={visibleData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={30} />
-                <Tooltip content={(props) => <MetricTooltip {...props} activeTag={activeTag} />} />
-                {tagNames.map((tagName, idx) => (
-                  <Line
-                    key={tagName}
-                    type="monotone"
-                    dataKey={tagName}
-                    name={tagName}
-                    stroke={colorForTag(idx, tagName, activeTag)}
-                    strokeWidth={activeTag === tagName ? 3 : 1.5}
-                    dot={false}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => toggleActive(tagName)}
-                  />
-                ))}
+                <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={30} domain={yDomain} />
+                <Tooltip
+                  isAnimationActive={false}
+                  content={(props) =>
+                    many ? (
+                      <ManyMetricTooltip
+                        active={props.active}
+                        label={props.label}
+                        rows={visibleData}
+                        xKey="period"
+                        entries={entries}
+                        activeTag={activeTag}
+                      />
+                    ) : (
+                      <MetricTooltip {...props} activeTag={activeTag} />
+                    )
+                  }
+                />
+                {many ? (
+                  <>
+                    {/* recharts는 선(<Line>)이 하나도 없으면 축을 아예 그리지 않는다 - 축만 살리려고 안 보이는 선 하나를 둔다 */}
+                    <Line dataKey={tagNames[0]} stroke="transparent" dot={false} activeDot={false} isAnimationActive={false} legendType="none" />
+                    <ManyLinesLayer rows={visibleData} xKey="period" entries={entries} activeTag={activeTag} onToggle={toggleActive} />
+                  </>
+                ) : (
+                  entries.map(({ name: tagName, idx }) => (
+                    <Line
+                      // 강조된 선은 key를 바꿔 다시 마운트시켜서(recharts는 마운트 순서대로 그림) 맨 앞에 그려지게 한다
+                      key={activeTag === tagName ? `${tagName}*` : tagName}
+                      type="monotone"
+                      dataKey={tagName}
+                      name={tagName}
+                      stroke={colorForTag(idx, tagName, activeTag)}
+                      strokeWidth={activeTag === tagName ? 3 : activeTag ? 1 : 1.5}
+                      dot={false}
+                      isAnimationActive={false}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => toggleActive(tagName)}
+                    />
+                  ))
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>
