@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { TagStatRow, TagType, SeriesSnapshotPoint } from "@/lib/queries";
 import {
   type Granularity,
@@ -12,7 +12,7 @@ import {
   toDeltaSeries,
 } from "@/lib/seriesTrend";
 import { formatWon } from "@/lib/format";
-import { TagPicker, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
+import { TagPicker, TagLegend, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
 
 const PRICE_PER_DOWNLOAD = 300;
 
@@ -258,10 +258,6 @@ export default function TagMetricTrendChart({
                     />
                   )}
                 />
-                <Legend
-                  wrapperStyle={{ fontSize: 11, cursor: "pointer" }}
-                  onClick={(o) => o.dataKey != null && toggleActive(String(o.dataKey))}
-                />
                 {tagNames.map((tagName, idx) => (
                   <Line
                     key={tagName}
@@ -279,6 +275,7 @@ export default function TagMetricTrendChart({
               </LineChart>
             </ResponsiveContainer>
           </div>
+          <TagLegend tagNames={tagNames} activeTag={activeTag} onToggle={toggleActive} />
         </div>
       )}
     </div>

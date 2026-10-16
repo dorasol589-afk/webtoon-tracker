@@ -44,6 +44,39 @@ export function MetricTooltip({
   );
 }
 
+/** recharts 기본 Legend는 항목이 많으면(키워드 전체 선택 = 300개 넘게) 차트 영역을 다 잡아먹고 화면 밖으로
+ * 넘쳐서 그래프가 안 보인다. 차트 밖에 높이를 제한한 스크롤 범례를 따로 그려서 해결 - 항목 클릭은 기존
+ * Legend와 같게 "고정 강조 토글". */
+export function TagLegend({
+  tagNames,
+  activeTag,
+  onToggle,
+}: {
+  tagNames: string[];
+  activeTag: string | null;
+  onToggle: (tagName: string) => void;
+}) {
+  if (tagNames.length === 0) return null;
+  return (
+    <div className="mt-2 max-h-28 overflow-y-auto rounded border border-neutral-100 px-2 py-1.5">
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {tagNames.map((tagName, idx) => (
+          <button
+            key={tagName}
+            type="button"
+            onClick={() => onToggle(tagName)}
+            className={`flex items-center gap-1 text-[11px] ${activeTag === tagName ? "font-semibold" : ""}`}
+            style={{ color: colorForTag(idx, tagName, activeTag) }}
+          >
+            <span className="inline-block h-0.5 w-3" style={{ backgroundColor: colorForTag(idx, tagName, activeTag) }} />
+            {tagName}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function TagPicker({
   options,
   selected,

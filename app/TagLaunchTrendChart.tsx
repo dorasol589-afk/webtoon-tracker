@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { TagStatRow, TagType } from "@/lib/queries";
-import { TagPicker, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
+import { TagPicker, TagLegend, MetricTooltip, colorForTag, useTagSelection, useActiveHighlight, useWheelZoom } from "./TagChartCommon";
 
 type Granularity = "year" | "quarter" | "month";
 
@@ -243,10 +243,6 @@ export default function TagLaunchTrendChart({
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={30} />
                 <Tooltip content={(props) => <MetricTooltip {...props} activeTag={activeTag} />} />
-                <Legend
-                  wrapperStyle={{ fontSize: 11, cursor: "pointer" }}
-                  onClick={(o) => o.dataKey != null && toggleActive(String(o.dataKey))}
-                />
                 {tagNames.map((tagName, idx) => (
                   <Line
                     key={tagName}
@@ -263,6 +259,7 @@ export default function TagLaunchTrendChart({
               </LineChart>
             </ResponsiveContainer>
           </div>
+          <TagLegend tagNames={tagNames} activeTag={activeTag} onToggle={toggleActive} />
         </div>
       )}
     </div>
