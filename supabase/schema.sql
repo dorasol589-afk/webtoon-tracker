@@ -1713,3 +1713,82 @@ $$;
 grant execute on function title_comment_history(bigint) to anon;
 
 grant execute on function kakao_titles_perf(bigint[]) to anon;
+-- 다운로드수 증가량 랭킹: 가장 최근 수집일 대비 period_days일 전(전일=1, 전주=7, 전월=30)까지의 증가량이 큰 순.
+-- 기준일에 수집이 없는 작품은 그 이전 가장 가까운 수집값을 기준으로 삼는다(이월). 수집을 시작한 지
+-- 얼마 안 돼 기준일 이전 값이 아예 없는 작품(신작 등)은 첫 수집값을 기준으로 하고 is_partial=true로 표시한다.
+-- 최근 3일 안에 수집되지 않은 작품(추적 종료된 완결작 등)과 증가량이 0 이하인 작품은 제외한다.
+-- sort_by: 'delta'(증가량 큰 순, 기본) | 'pct'(증가율 큰 순 - 기준 다운로드가 1만 미만이면 변동폭이 과장돼 제외)
+drop function if exists download_delta_ranking(int, int);
+create or replace function download_delta_ranking(period_days int, result_limit int default 50, sort_by text default 'delta')
+returns table (
+  title_id bigint,
+  title_name text,
+  thumbnail_url text,
+  studio_name text,
+  is_finished boolean,
+  is_adult boolean,
+  download_count bigint,
+  prev_count bigint,
+  delta bigint,
+  delta_pct numeric,
+  base_date date,
+  latest_date date,
+  is_partial boolean
+)
+language sql
+stable
+as $$
+  with latest as (
+    select max(snapshot_date) as d from series_snapshots
+  ),
+  per_title as (
+    select
+      ti.title_id, ti.title_name, ti.thumbnail_url,
+      coalesce(sa.canonical_name, ti.studio_name) as studio_name,
+      ti.is_finished, ti.is_adult,
+      cur.download_count as cur_count, cur.snapshot_date as cur_date,
+      base.download_count as base_count, base.snapshot_date as base_date,
+      first_s.download_count as first_count, first_s.snapshot_date as first_date
+    from titles ti
+    join lateral (
+      select ss.download_count, ss.snapshot_date
+      from series_snapshots ss
+      where ss.title_id = ti.title_id and ss.snapshot_date <= (select d from latest)
+      order by ss.snapshot_date desc limit 1
+    ) cur on true
+    left join lateral (
+      select ss.download_count, ss.snapshot_date
+      from series_snapshots ss
+      where ss.title_id = ti.title_id and ss.snapshot_date <= (select d from latest) - period_days
+      order by ss.snapshot_date desc limit 1
+    ) base on true
+    left join lateral (
+      select ss.download_count, ss.snapshot_date
+      from series_snapshots ss
+      where ss.title_id = ti.title_id
+      order by ss.snapshot_date asc limit 1
+    ) first_s on true
+    left join studio_aliases sa on sa.raw_name = ti.studio_name
+    where ti.is_active = true
+  )
+  select
+    pt.title_id, pt.title_name, pt.thumbnail_url, pt.studio_name, pt.is_finished, pt.is_adult,
+    pt.cur_count as download_count,
+    coalesce(pt.base_count, pt.first_count) as prev_count,
+    (pt.cur_count - coalesce(pt.base_count, pt.first_count)) as delta,
+    case when coalesce(pt.base_count, pt.first_count) > 0
+      then round((pt.cur_count - coalesce(pt.base_count, pt.first_count)) * 100.0 / coalesce(pt.base_count, pt.first_count), 2)
+    end as delta_pct,
+    coalesce(pt.base_date, pt.first_date) as base_date,
+    pt.cur_date as latest_date,
+    (pt.base_count is null) as is_partial
+  from per_title pt
+  where pt.cur_date >= (select d from latest) - 3
+    and (pt.cur_count - coalesce(pt.base_count, pt.first_count)) > 0
+    and (sort_by <> 'pct' or coalesce(pt.base_count, pt.first_count) >= 10000)
+  order by
+    case when sort_by = 'pct' then (pt.cur_count - coalesce(pt.base_count, pt.first_count))::numeric / nullif(coalesce(pt.base_count, pt.first_count), 0) end desc nulls last,
+    delta desc
+  limit result_limit;
+$$;
+grant execute on function download_delta_ranking(int, int, text) to anon;

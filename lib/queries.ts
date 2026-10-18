@@ -1501,6 +1501,43 @@ export async function getTopTitlesByDownload(limit = 10): Promise<DownloadRankRo
   return (data ?? []) as DownloadRankRow[];
 }
 
+export type DownloadDeltaPeriod = "day" | "week" | "month";
+
+export const DOWNLOAD_DELTA_DAYS: Record<DownloadDeltaPeriod, number> = { day: 1, week: 7, month: 30 };
+
+export interface DownloadDeltaRow {
+  title_id: number;
+  title_name: string;
+  thumbnail_url: string | null;
+  studio_name: string | null;
+  is_finished: boolean;
+  is_adult: boolean;
+  download_count: number;
+  prev_count: number;
+  delta: number;
+  delta_pct: number | null;
+  base_date: string;
+  latest_date: string;
+  /** 기준일 이전 수집값이 없어 첫 수집값을 기준으로 계산한 경우(수집을 시작한 지 얼마 안 된 작품) */
+  is_partial: boolean;
+}
+
+/** 시리즈 다운로드수 증가량 순위 - 전일/전주/전월(30일) 대비. 증가량 큰 순, 증가량 0 이하는 제외 */
+export async function getDownloadDeltaRanking(
+  period: DownloadDeltaPeriod,
+  limit = 50,
+  sortBy: "delta" | "pct" = "delta"
+): Promise<DownloadDeltaRow[]> {
+  const supabase = getSupabaseAnon();
+  const { data, error } = await supabase.rpc("download_delta_ranking", {
+    period_days: DOWNLOAD_DELTA_DAYS[period],
+    result_limit: limit,
+    sort_by: sortBy,
+  });
+  if (error) throw error;
+  return (data ?? []) as DownloadDeltaRow[];
+}
+
 export type TagType = "GENRE" | "KEYWORD";
 
 export interface TagStatRow {
