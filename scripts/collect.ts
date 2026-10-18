@@ -427,6 +427,11 @@ async function main() {
                 firstEpisodeDate = existingFirst.service_date;
               } else {
                 firstEpisodeDate = await findAdultTitleLaunchDate(title.titleName);
+                // 신작(is_new)인데 나무위키 날짜가 두 달 넘게 과거면 같은 제목의 다른 작품/예전 판본 문서일 가능성이 높다
+                // (웹툰가이드와 대조해보니 장난질·내 꽃을 훔친 여자 등이 실제로 그랬다) - 버리고 발견일을 런칭일로 둔다
+                if (firstEpisodeDate && title.new && firstEpisodeDate < shiftDateString(snapshotDate, -60)) {
+                  firstEpisodeDate = null;
+                }
                 if (firstEpisodeDate) adultLaunchDateFound++;
                 else adultLaunchDateMissed++;
               }
