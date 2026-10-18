@@ -150,8 +150,9 @@ create table if not exists comment_snapshots (
   foreign key (title_id, no) references episodes(title_id, no)
 );
 
-create index if not exists idx_comment_snapshots_lookup
-  on comment_snapshots (title_id, no, snapshot_date desc);
+-- (idx_comment_snapshots_lookup(title_id, no, snapshot_date desc)은 기본키와 같은 용도라 267MB만 차지해서 삭제함 -
+--  기본키 인덱스가 같은 조회를 역방향 스캔으로 처리한다)
+drop index if exists idx_comment_snapshots_lookup;
 
 create index if not exists idx_comment_snapshots_date
   on comment_snapshots (snapshot_date);
@@ -1792,3 +1793,59 @@ as $$
   limit result_limit;
 $$;
 grant execute on function download_delta_ranking(int, int, text) to anon;
+
+-- 댓글수 일일 스냅샷 정리(DB 용량 관리): 최근 keep_days일은 매일 기록을 그대로 두고, 그보다 오래된 날짜는 작품별
+-- "주차 체크포인트 요일"(연재 요일의 다음날 - 월요웹툰이면 화요일, 연재요일 모르는 매일+는 월요일 - 회차 댓글수 그래프의
+-- 주별 보기 기준과 같다)의 기록만 남기고 지운다. 작품별로 마지막 기록은 항상 남긴다(추적이 끝난 완결작 보호).
+-- from_date/to_date를 주면 그 날짜 범위만 처리한다(처음 정리할 때 수백만 행을 한 번에 지우다 시간 초과가 나지 않게
+-- 나눠서 호출하는 용도). 수집기는 인자 없이 매일 밤 호출한다. 삭제한 행 수를 반환.
+create or replace function prune_comment_snapshots(keep_days int default 14, from_date date default null, to_date date default null)
+returns bigint
+language plpgsql
+as $$
+declare
+  cutoff date;
+  d date;
+  c bigint;
+  n bigint := 0;
+begin
+  select max(snapshot_date) - keep_days into cutoff from comment_snapshots;
+  if cutoff is null then return 0; end if;
+
+  create temp table _prune_anchor on commit drop as
+    select ti.title_id,
+      coalesce(((case wd.weekday
+        when 'SUNDAY' then 0 when 'MONDAY' then 1 when 'TUESDAY' then 2 when 'WEDNESDAY' then 3
+        when 'THURSDAY' then 4 when 'FRIDAY' then 5 when 'SATURDAY' then 6 end) + 1) % 7, 1) as dow
+    from titles ti
+    left join lateral (
+      select ts.weekday from title_snapshots ts
+      where ts.title_id = ti.title_id and ts.weekday is not null
+      order by ts.snapshot_date desc limit 1
+    ) wd on true;
+  create unique index on _prune_anchor (title_id);
+
+  create temp table _prune_last on commit drop as
+    select title_id, max(snapshot_date) as last_date from comment_snapshots group by title_id;
+  create unique index on _prune_last (title_id);
+
+  for d in
+    select distinct snapshot_date from comment_snapshots
+    where snapshot_date < cutoff
+      and (from_date is null or snapshot_date >= from_date)
+      and (to_date is null or snapshot_date <= to_date)
+    order by 1
+  loop
+    delete from comment_snapshots cs
+    using _prune_anchor a, _prune_last l
+    where cs.snapshot_date = d
+      and a.title_id = cs.title_id
+      and l.title_id = cs.title_id
+      and extract(dow from cs.snapshot_date)::int <> a.dow
+      and cs.snapshot_date <> l.last_date;
+    get diagnostics c = row_count;
+    n := n + c;
+  end loop;
+  return n;
+end;
+$$;

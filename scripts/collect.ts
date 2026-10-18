@@ -565,6 +565,11 @@ async function main() {
       );
       console.log(`  완결 후 추적 중인 ${finalTotals.size}개 작품의 총댓글수 갱신`);
     }
+    // DB 용량 관리: 최근 14일은 매일 기록을 두고, 그보다 오래된 날짜는 작품별 주차 체크포인트 요일(연재요일 다음날)
+    // 기록만 남기고 지운다(supabase/schema.sql의 prune_comment_snapshots). 실패해도 수집 자체엔 영향 없게 로그만 남김.
+    const { data: prunedRows, error: pruneError } = await supabase.rpc("prune_comment_snapshots", { keep_days: 14 });
+    if (pruneError) console.error("  오래된 댓글 스냅샷 정리 실패:", pruneError.message);
+    else console.log(`  오래된 댓글 스냅샷 정리: ${prunedRows}행 삭제`);
   } else {
     console.log("  드라이런 모드 - 샘플 20건 출력:");
     const byComment = [...dedupedSnapshots].sort((a, b) => b.comment_count - a.comment_count);
