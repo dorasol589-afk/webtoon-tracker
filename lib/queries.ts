@@ -1503,7 +1503,8 @@ export async function getTopTitlesByDownload(limit = 10): Promise<DownloadRankRo
 
 export type DownloadDeltaPeriod = "day" | "week" | "month";
 
-export const DOWNLOAD_DELTA_DAYS: Record<DownloadDeltaPeriod, number> = { day: 1, week: 7, month: 30 };
+/** 전주/전월은 작품별 주차 체크포인트 기준이라 7일/4주(28일) 단위 */
+export const DOWNLOAD_DELTA_DAYS: Record<DownloadDeltaPeriod, number> = { day: 1, week: 7, month: 28 };
 
 export interface DownloadDeltaRow {
   title_id: number;

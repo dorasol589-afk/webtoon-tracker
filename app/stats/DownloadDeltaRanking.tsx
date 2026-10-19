@@ -4,8 +4,8 @@ import { formatWon } from "@/lib/format";
 
 const PERIODS: { value: DownloadDeltaPeriod; label: string; hint: string }[] = [
   { value: "day", label: "전일 대비", hint: "하루 전" },
-  { value: "week", label: "전주 대비", hint: "7일 전" },
-  { value: "month", label: "전월 대비", hint: "30일 전" },
+  { value: "week", label: "전주 대비", hint: "1주 전" },
+  { value: "month", label: "전월 대비", hint: "4주 전" },
 ];
 
 const PRICE_PER_DOWNLOAD = 300;
@@ -19,7 +19,6 @@ export default async function DownloadDeltaRanking({
 }) {
   const rows = await getDownloadDeltaRanking(period, 50, sortBy);
   const current = PERIODS.find((p) => p.value === period)!;
-  const latest = rows[0]?.latest_date;
 
   return (
     <section className="mb-10">
@@ -94,7 +93,12 @@ export default async function DownloadDeltaRanking({
                       </span>
                     </Link>
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{r.download_count.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {r.download_count.toLocaleString()}
+                    <span className="block text-[10px] text-neutral-400">
+                      {r.base_date.slice(5)} → {r.latest_date.slice(5)}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-right font-medium tabular-nums text-rose-600">▲ {r.delta.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-neutral-500">
                     {r.delta_pct === null ? "-" : `${Number(r.delta_pct).toLocaleString()}%`}
@@ -107,9 +111,9 @@ export default async function DownloadDeltaRanking({
         </div>
       )}
       <p className="mt-2 text-xs text-neutral-400">
-        {latest ? `${latest} 기준. ` : ""}
-        {sortBy === "pct" ? "증가율 큰 순(기준 다운로드 1만 미만 작품은 변동폭이 과장돼 제외, 상위 50개). " : "증가량 큰 순(상위 50개). "}기준일에 수집값이 없으면 그 이전의 가장 가까운 값과 비교하고, 수집을 시작한 지 얼마 안 된 작품은 첫 수집값부터
-        계산합니다. 추정 매출은 증가량 × 300원입니다.
+        {sortBy === "pct" ? "증가율 큰 순(기준 다운로드 1만 미만 작품은 변동폭이 과장돼 제외, 상위 50개). " : "증가량 큰 순(상위 50개). "}전주·전월 대비는 작품별 주차 체크포인트(연재요일 하루 전, 다음 회차 올라오기 직전)를 기준으로 가장 최근 체크포인트 값과 1주(4주) 전
+        체크포인트 값을 비교합니다(각 행 아래 날짜가 비교 구간). 기준일에 수집값이 없으면 그 이전의 가장 가까운 값을 쓰고, 수집을 시작한 지
+        얼마 안 된 작품은 첫 수집값부터 계산합니다. 추정 매출은 증가량 × 300원입니다.
       </p>
     </section>
   );
