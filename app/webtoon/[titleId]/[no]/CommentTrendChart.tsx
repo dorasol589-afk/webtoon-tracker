@@ -35,16 +35,16 @@ function addDays(dateStr: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-// 연재 요일 당일 새벽 기록(= 다음 회차가 올라오기 직전, 올라온 지 7일째)을 주차 체크포인트로 잡는다 (예: 월요웹툰이면
-// 월요일마다 확인). 이 시점엔 최종 댓글수의 약 98%가 쌓여 있어 회차끼리 비교가 안정적이다(다음날 기록은 약 67%뿐).
-// 오래된 구간(2026-10-04 이전)은 예전 기준(연재요일 다음날)으로 정리된 기록만 남아 있어 직전 관측치로 대체돼 표시된다.
+// 연재 요일 하루 전(월요웹툰이면 일요일) 기록을 주차 체크포인트로 잡는다. 새 회차가 요일 전날 밤 10~11시에 올라오므로 그날
+// 저녁 수집값이 "다음 회차 올라오기 직전"(이전 회차가 올라온 지 거의 7일 - 댓글이 최종값에 가깝게 쌓인 시점)이다.
 // 매일+ 작품이거나 요일 정보가 없으면 월요일을 기본 체크포인트로 쓴다.
+// 오래된 구간(2026-10-05 이전)은 예전 기준으로 정리된 기록만 남아 있어 직전 관측치로 대체돼 표시될 수 있다.
 function getAnchorWeekday(seriesWeekday: string | null | undefined): number {
   const base = seriesWeekday ? WEEKDAY_TO_NUM[seriesWeekday] : undefined;
-  return base === undefined ? 1 : base;
+  return base === undefined ? 1 : (base + 6) % 7;
 }
 
-// comment_count는 누적값이라 매주 같은 체크포인트 요일(연재요일 당일)의 값을 뽑아서 주차별 변화를 비교한다.
+// comment_count는 누적값이라 매주 같은 체크포인트 요일(연재요일 하루 전)의 값을 뽑아서 주차별 변화를 비교한다.
 // 그 날짜에 관측치가 없으면 바로 이전 관측치로 대체하고, 그마저 없으면(수집 시작 전) 최초 관측일 데이터를 쓴다.
 // 라벨은 계산된 가상의 체크포인트 날짜가 아니라 실제로 쓰인 관측치의 날짜를 그대로 보여준다.
 function aggregateByWeek(data: SnapshotPoint[], anchorWeekday: number): SnapshotPoint[] {

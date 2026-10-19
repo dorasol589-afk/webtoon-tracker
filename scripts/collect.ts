@@ -59,15 +59,9 @@ function shiftDateString(date: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-// 오늘 KST 기준 hour:minute 시각을 실제 epoch ms로 환산 (완결작 백필 시간 예산 마감 계산용)
-function getKstDeadlineTimestamp(hour: number, minute: number): number {
-  const now = new Date();
-  const kstNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
-  const deadlineKst = new Date(kstNow);
-  deadlineKst.setHours(hour, minute, 0, 0);
-  const diffMs = deadlineKst.getTime() - kstNow.getTime();
-  return now.getTime() + diffMs;
-}
+// 완결작 초기 백필에 쓸 수 있는 시간 예산 - 수집이 저녁(KST 18시 무렵)에 도는 구조라 "몇 시까지"가 아니라 시작 시각
+// 기준 경과 시간으로 마감한다(예전엔 새벽 3:10 시작 기준 08:10 KST까지였음). 워크플로 timeout(300분)보다 충분히 짧게.
+const FINISHED_BACKFILL_BUDGET_MS = 3 * 60 * 60 * 1000;
 
 function parseServiceDate(desc: string): string | null {
   // "26.08.09" -> "2026-08-09"
@@ -834,15 +828,15 @@ async function main() {
     console.log("  (드라이런 모드 - 채용공고 조회 생략)");
   }
 
-  console.log(`[10/10] 완결 웹툰 초기 백필 (회차+댓글수, 작품당 최초 1회, 08:10 KST까지)...`);
+  console.log(`[10/10] 완결 웹툰 초기 백필 (회차+댓글수, 작품당 최초 1회, 시작 후 3시간까지)...`);
   let finishedBackfilledCount = 0;
   let finishedStoppedForTime = false;
   let finishedTotal = 0;
   if (titleLimit) {
     console.log("  (TITLE_LIMIT 테스트 실행이라 완결작 백필은 건너뜀)");
   } else if (supabase) {
-    const deadline = getKstDeadlineTimestamp(8, 10);
-    console.log(`  마감 시각(KST 08:10): ${new Date(deadline).toISOString()}`);
+    const deadline = startedAt + FINISHED_BACKFILL_BUDGET_MS;
+    console.log(`  마감 시각: ${new Date(deadline).toISOString()} (수집 시작 후 3시간)`);
 
     // step 1에서 이미 받아둔 목록 재사용 (같은 API를 두 번 호출하지 않도록)
     const finishedTitles = finishedListRaw;
@@ -1091,7 +1085,7 @@ async function main() {
 
     console.log(
       `  완결작 백필 ${finishedBackfilledCount}개 처리${
-        finishedStoppedForTime ? " (시간 마감으로 중단 - 내일 새벽 3:10부터 이어서 진행)" : ""
+        finishedStoppedForTime ? " (시간 마감으로 중단 - 내일 수집 때 이어서 진행)" : ""
       }`
     );
   } else {

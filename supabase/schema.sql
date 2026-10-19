@@ -1795,18 +1795,18 @@ $$;
 grant execute on function download_delta_ranking(int, int, text) to anon;
 
 -- 댓글수 일일 스냅샷 정리(DB 용량 관리): 최근 keep_days일은 매일 기록을 그대로 두고, 그보다 오래된 날짜는 작품별
--- "주차 체크포인트 요일"의 기록만 남기고 지운다. 체크포인트는 연재 요일 당일 새벽 기록(월요웹툰이면 월요일, 연재요일을
--- 모르는 매일+는 월요일) = 다음 회차가 올라오기 직전 시점이다 - 올라온 지 7일째라 최종 댓글수의 약 98%가 쌓인 값이라
--- 회차/주끼리 비교가 안정적이다(다음날 기록은 약 67%뿐이라 변동이 큼). 회차 댓글수 그래프의 주별 보기 기준과 같다.
--- legacy_before 이전 날짜는 예전 기준(연재요일 다음날)으로 이미 정리돼 있어서 건드리지 않는다. 작품별로 마지막 기록은 항상 남긴다(추적이 끝난 완결작 보호).
+-- "주차 체크포인트 요일"의 기록만 남기고 지운다. 체크포인트는 연재 요일 하루 전(월요웹툰이면 일요일, 연재요일을 모르는
+-- 매일+는 월요일) 기록이다 - 새 회차가 요일 전날 밤 10~11시에 올라오므로 그날 저녁 수집값이 다음 회차가 올라오기 직전
+-- (이전 회차가 올라온 지 거의 7일, 최종 댓글수의 약 98%가 쌓인 값)이라 회차/주끼리 비교가 안정적이다. 회차 댓글수·다운로드
+-- 그래프의 주별 보기 기준과 같다. legacy_before 이전 날짜는 예전 기준으로 이미 정리돼 있어서 건드리지 않는다. 작품별로 마지막 기록은 항상 남긴다(추적이 끝난 완결작 보호).
 -- from_date/to_date를 주면 그 날짜 범위만 처리한다(처음 정리할 때 수백만 행을 한 번에 지우다 시간 초과가 나지 않게
 -- 나눠서 호출하는 용도). 수집기는 인자 없이 매일 밤 호출한다. 삭제한 행 수를 반환.
-drop function if exists prune_comment_snapshots(int, date, date);
+drop function if exists prune_comment_snapshots(int, date, date, date);
 create or replace function prune_comment_snapshots(
   keep_days int default 14,
   from_date date default null,
   to_date date default null,
-  legacy_before date default '2026-10-04'
+  legacy_before date default '2026-10-05'
 )
 returns bigint
 language plpgsql
@@ -1822,9 +1822,9 @@ begin
 
   create temp table _prune_anchor on commit drop as
     select ti.title_id,
-      coalesce(case wd.weekday
+      coalesce(((case wd.weekday
         when 'SUNDAY' then 0 when 'MONDAY' then 1 when 'TUESDAY' then 2 when 'WEDNESDAY' then 3
-        when 'THURSDAY' then 4 when 'FRIDAY' then 5 when 'SATURDAY' then 6 end, 1) as dow
+        when 'THURSDAY' then 4 when 'FRIDAY' then 5 when 'SATURDAY' then 6 end) + 6) % 7, 1) as dow
     from titles ti
     left join lateral (
       select ts.weekday from title_snapshots ts
