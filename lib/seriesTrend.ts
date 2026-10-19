@@ -25,11 +25,12 @@ function addDays(dateStr: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-// 연재 요일 다음날을 주차 체크포인트 요일로 잡는다 (예: 월요웹툰이면 화요일마다 확인).
+// 연재 요일 당일 새벽 기록(= 다음 회차가 올라오기 직전)을 주차 체크포인트로 잡는다 (예: 월요웹툰이면 월요일마다 확인).
+// 회차 댓글수 그래프와 같은 기준 - 올라온 직후(+1일)보다 7일째 값이 안정적이라 주별 비교에 적합하다.
 // 매일+ 작품이거나 요일 정보가 없으면 월요일을 기본 체크포인트로 쓴다.
 export function getAnchorWeekday(seriesWeekday: string | null | undefined): number {
   const base = seriesWeekday ? WEEKDAY_TO_NUM[seriesWeekday] : undefined;
-  return base === undefined ? 1 : (base + 1) % 7;
+  return base === undefined ? 1 : base;
 }
 
 // download_count는 누적값이라 매주 같은 체크포인트 요일의 값을 뽑아서 주차별 변화를 비교한다.
