@@ -17,8 +17,11 @@ export async function GET(req: Request) {
     .filter(Boolean);
 
   try {
-    const data = await getTagDownloadSeriesBatch(tagType, tagNames);
-    return Response.json({ data });
+    const [data, weekly] = await Promise.all([
+      getTagDownloadSeriesBatch(tagType, tagNames),
+      getTagDownloadSeriesBatch(tagType, tagNames, true),
+    ]);
+    return Response.json({ data, weekly });
   } catch (err) {
     const message =
       err instanceof Error

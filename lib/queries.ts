@@ -1634,7 +1634,8 @@ export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[
  * series_snapshots만 합산하는 가벼운 전용 함수(genre_download_series)를 쓴다. */
 export async function getTagDownloadSeriesBatch(
   tagType: TagType,
-  tagNames: string[]
+  tagNames: string[],
+  weekly = false
 ): Promise<Record<string, SeriesSnapshotPoint[]>> {
   if (tagNames.length === 0) return {};
   const supabase = getSupabaseAnon();
@@ -1652,10 +1653,19 @@ export async function getTagDownloadSeriesBatch(
       const perDate = new Map<string, number>();
       for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
         const batch = ids.slice(i, i + CHUNK_SIZE);
-        const { data, error } = await supabase.rpc("genre_download_series", { target_ids: batch });
-        if (error) throw error;
-        for (const row of (data ?? []) as { snapshot_date: string; total_download: number }[]) {
-          perDate.set(row.snapshot_date, (perDate.get(row.snapshot_date) ?? 0) + row.total_download);
+        if (weekly) {
+          // 작품별 주차 체크포인트(연재요일 하루 전) 값을 달력 주(월요일 시작)별로 합산 - snapshot_date는 그 주의 월요일
+          const { data, error } = await supabase.rpc("genre_download_series_weekly", { target_ids: batch });
+          if (error) throw error;
+          for (const row of (data ?? []) as { week_start: string; total_download: number }[]) {
+            perDate.set(row.week_start, (perDate.get(row.week_start) ?? 0) + row.total_download);
+          }
+        } else {
+          const { data, error } = await supabase.rpc("genre_download_series", { target_ids: batch });
+          if (error) throw error;
+          for (const row of (data ?? []) as { snapshot_date: string; total_download: number }[]) {
+            perDate.set(row.snapshot_date, (perDate.get(row.snapshot_date) ?? 0) + row.total_download);
+          }
         }
       }
       result[tagName] = [...perDate.entries()]

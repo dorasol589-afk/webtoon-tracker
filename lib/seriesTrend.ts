@@ -122,6 +122,19 @@ export function aggregateByCalendarWeek(data: SeriesSnapshotPoint[]): SeriesSnap
     .map(([week, point]) => ({ snapshot_date: week, download_count: point.download_count }));
 }
 
+/** 작품별 체크포인트(연재요일 하루 전) 주별 값을 뽑은 뒤 날짜 키를 그 체크포인트가 속한 달력 주의 월요일로 바꾼다.
+ * 작품마다 체크포인트 요일이 달라도 월~일 한 주에 정확히 하루씩이라 키가 겹치지 않고, 여러 작품을 같은 주끼리
+ * 한 그래프에서 비교할 수 있다(관심작품 비교 탭용). */
+export function aggregateByCheckpointWeek(
+  data: SeriesSnapshotPoint[],
+  seriesWeekday: string | null | undefined
+): SeriesSnapshotPoint[] {
+  return aggregateByWeek(data, getAnchorWeekday(seriesWeekday)).map((p) => ({
+    snapshot_date: mondayOf(p.snapshot_date),
+    download_count: p.download_count,
+  }));
+}
+
 /** "2026-08-29" 같은 값을 "8월"로 표기(비교 탭의 월간 보기용 라벨). */
 export function formatMonthLabel(dateStr: string): string {
   const [, m] = dateStr.split("-").map(Number);

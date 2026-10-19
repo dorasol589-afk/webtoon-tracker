@@ -5,7 +5,6 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import type { TagStatRow, TagType, SeriesSnapshotPoint } from "@/lib/queries";
 import {
   type Granularity,
-  aggregateByCalendarWeek,
   aggregateByCalendarMonth,
   formatCalendarWeekLabel,
   formatMonthLabel,
@@ -30,9 +29,11 @@ const VIEW_MODE_OPTIONS: { value: ViewMode; label: string }[] = [
   { value: "delta", label: "증감" },
 ];
 
+/** 주별은 서버(genre_download_series_weekly)가 작품별 체크포인트 값을 달력 주로 합산해 내려주므로 그대로 쓰고,
+ * 월별만 일별 합계 시계열에서 다시 집계한다. */
 function reaggregate(points: SeriesSnapshotPoint[], granularity: Granularity): SeriesSnapshotPoint[] {
-  if (granularity === "day") return points;
-  return granularity === "week" ? aggregateByCalendarWeek(points) : aggregateByCalendarMonth(points);
+  if (granularity === "day" || granularity === "week") return points;
+  return aggregateByCalendarMonth(points);
 }
 
 function xLabelFor(granularity: Granularity) {
@@ -86,6 +87,7 @@ export default function TagMetricTrendChart({
   const [granularity, setGranularity] = useState<Granularity>("week");
   const [viewMode, setViewMode] = useState<ViewMode>("cumulative");
   const [rawByTag, setRawByTag] = useState<Record<string, SeriesSnapshotPoint[]> | null>(null);
+  const [weeklyByTag, setWeeklyByTag] = useState<Record<string, SeriesSnapshotPoint[]> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { activeTag, setActiveTag, toggleActive } = useActiveHighlight();
@@ -102,11 +104,13 @@ export default function TagMetricTrendChart({
         if (cancelled) return;
         if (json.error) throw new Error(json.error);
         setRawByTag(json.data as Record<string, SeriesSnapshotPoint[]>);
+        setWeeklyByTag(json.weekly as Record<string, SeriesSnapshotPoint[]>);
       })
       .catch((err) => {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
         setRawByTag(null);
+        setWeeklyByTag(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -117,10 +121,11 @@ export default function TagMetricTrendChart({
   }, [tagType, tagNames]);
 
   const chartData = useMemo(() => {
-    if (!rawByTag) return [];
+    const source = granularity === "week" ? weeklyByTag : rawByTag;
+    if (!source) return [];
     const valueByTag: Record<string, { snapshot_date: string; value: number }[]> = {};
     for (const tagName of tagNames) {
-      const aggregated = reaggregate(rawByTag[tagName] ?? [], granularity);
+      const aggregated = reaggregate(source[tagName] ?? [], granularity);
       if (mode === "revenue") {
         valueByTag[tagName] = toDeltaSeries(aggregated).map((p) => ({
           snapshot_date: p.snapshot_date,
@@ -133,7 +138,7 @@ export default function TagMetricTrendChart({
       }
     }
     return mergeByDate(valueByTag, tagNames);
-  }, [rawByTag, tagNames, granularity, mode, viewMode]);
+  }, [rawByTag, weeklyByTag, tagNames, granularity, mode, viewMode]);
   const { sliceRange, containerRef, resetZoom, isZoomed } = useWheelZoom(chartData.length, 50, 20);
   const visibleData = chartData.slice(sliceRange[0], sliceRange[1] + 1);
 

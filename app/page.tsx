@@ -8,7 +8,7 @@ import {
   getDownloadHistoryByTitleId,
 } from "@/lib/queries";
 import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
-import { aggregateByCalendarWeek, toDeltaSeries } from "@/lib/seriesTrend";
+import { aggregateByCheckpointWeek, toDeltaSeries } from "@/lib/seriesTrend";
 import { COMPARISON_COLORS } from "@/lib/chartColors";
 import { NovelOriginBadge, NaverStatStack } from "@/app/PerfBadges";
 import NicknameSwitcher from "@/app/NicknameSwitcher";
@@ -86,9 +86,10 @@ async function WatchlistBody({ userName }: { userName: string }) {
     titleName: titleBasics.get(id)?.title_name ?? `#${id}`,
     color: colorOf(id),
     points: downloadHistories[i].map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count })),
+    weekday: perfMap.get(id)?.weekday ?? null,
   }));
   const revenueSeries = titleIds.map((id, i) => {
-    const weekly = aggregateByCalendarWeek(downloadHistories[i]);
+    const weekly = aggregateByCheckpointWeek(downloadHistories[i], perfMap.get(id)?.weekday);
     return {
       titleId: id,
       titleName: titleBasics.get(id)?.title_name ?? `#${id}`,

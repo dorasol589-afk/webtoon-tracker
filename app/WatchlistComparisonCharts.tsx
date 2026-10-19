@@ -15,7 +15,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { formatWon } from "@/lib/format";
-import { formatCalendarWeekLabel, formatMonthLabel, aggregateByCalendarWeek, aggregateByCalendarMonth } from "@/lib/seriesTrend";
+import { formatCalendarWeekLabel, formatMonthLabel, aggregateByCheckpointWeek, aggregateByCalendarMonth } from "@/lib/seriesTrend";
 
 export interface ComparisonSeries {
   titleId: number;
@@ -23,6 +23,8 @@ export interface ComparisonSeries {
   /** 댓글수/다운로드수/매출액 세 차트에서 같은 작품이 항상 같은 색을 쓰도록 호출하는 쪽(app/page.tsx)에서 고정해서 넘김 */
   color: string;
   points: { snapshot_date: string; value: number }[];
+  /** 연재 요일(MONDAY 등) - 주별 보기에서 작품별 체크포인트(요일 하루 전)를 고르는 데 쓴다 */
+  weekday?: string | null;
 }
 
 const INACTIVE_COLOR = "#d1d5db";
@@ -154,12 +156,16 @@ const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
   { value: "month", label: "월별" },
 ];
 
-/** 다운로드수 비교는 주별/월별로 볼 때도 작품마다 관측일이 달라 병합이 어긋나지 않도록
- * 달력 기준(월요일 시작 주 / 매월 1일)으로 정규화해서 다시 집계한다. */
-function reaggregatePoints(points: { snapshot_date: string; value: number }[], granularity: Granularity) {
+/** 다운로드수 비교는 주별/월별로 볼 때도 작품마다 관측일이 달라 병합이 어긋나지 않도록 키를 달력 기준(월요일 시작 주 /
+ * 매월 1일)으로 정규화한다. 주별 값은 작품별 체크포인트(연재요일 하루 전) 기준, 월별은 그 달 마지막 관측값. */
+function reaggregatePoints(
+  points: { snapshot_date: string; value: number }[],
+  granularity: Granularity,
+  weekday?: string | null
+) {
   if (granularity === "day") return points;
   const asSnapshots = points.map((p) => ({ snapshot_date: p.snapshot_date, download_count: p.value }));
-  const aggregated = granularity === "week" ? aggregateByCalendarWeek(asSnapshots) : aggregateByCalendarMonth(asSnapshots);
+  const aggregated = granularity === "week" ? aggregateByCheckpointWeek(asSnapshots, weekday) : aggregateByCalendarMonth(asSnapshots);
   return aggregated.map((p) => ({ snapshot_date: p.snapshot_date, value: p.download_count }));
 }
 
@@ -232,7 +238,7 @@ export function DownloadComparisonChart({ series }: { series: ComparisonSeries[]
   const [viewMode, setViewMode] = useState<ViewMode>("value");
   const adjustedSeries = useMemo(() => {
     return series.map((s) => {
-      const reaggregated = reaggregatePoints(s.points, granularity);
+      const reaggregated = reaggregatePoints(s.points, granularity, s.weekday);
       return { ...s, points: viewMode === "growth" ? toPeriodOverPeriodGrowth(reaggregated) : reaggregated };
     });
   }, [series, granularity, viewMode]);

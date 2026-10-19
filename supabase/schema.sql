@@ -1638,6 +1638,69 @@ $$;
 
 grant execute on function genre_download_series(bigint[]) to anon;
 
+-- 장르/키워드별 "주별" 다운로드 추이용: 작품마다 자기 체크포인트(연재요일 하루 전 = 다음 회차 올라오기 직전) 값을 골라
+-- 달력 주(월요일 시작)별로 합산한다. 작품마다 체크포인트 요일이 달라도 월~일 한 주에 정확히 하루씩 있어서 같은 주끼리 합산된다.
+-- 체크포인트 당일 수집이 없으면 그 이전 가장 가까운 값(forward-fill), 수집을 시작하기 전 주는 그 작품의 첫 수집값으로 채운다
+-- (개별 작품 그래프와 같은 방식 - 늦게 수집이 시작된 작품이 한꺼번에 더해지는 가짜 급등이 생기지 않도록).
+-- 체크포인트가 아직 안 지난 작품이 있는 마지막 주(일요일이 최근 수집일 이후인 주)는 합계가 줄어 보이므로 내보내지 않는다.
+create or replace function genre_download_series_weekly(target_ids bigint[])
+returns table (
+  week_start date,
+  total_download bigint
+)
+language sql
+stable
+as $$
+  with latest as (
+    select max(snapshot_date) as d from series_snapshots
+  ),
+  tds as (
+    select ss.title_id, min(ss.snapshot_date) as first_date
+    from series_snapshots ss
+    where ss.title_id = any(target_ids)
+      and ss.title_id not in (select title_id from series_products where one_time)
+    group by ss.title_id
+  ),
+  wd as (
+    select tds.title_id,
+      -- 월요일 기준 오프셋(월=0 ... 일=6) = 연재요일 하루 전; 요일 정보가 없거나 매일+ 면 월요일(0)
+      coalesce(((case (
+          select ts.weekday from title_snapshots ts
+          where ts.title_id = tds.title_id and ts.weekday is not null
+          order by ts.snapshot_date desc limit 1
+        )
+        when 'SUNDAY' then 0 when 'MONDAY' then 1 when 'TUESDAY' then 2 when 'WEDNESDAY' then 3
+        when 'THURSDAY' then 4 when 'FRIDAY' then 5 when 'SATURDAY' then 6 end) + 5) % 7, 0) as cp_offset
+    from tds
+  ),
+  weeks as (
+    select gs::date as week_start
+    from generate_series(
+      date_trunc('week', (select min(first_date) from tds))::date,
+      date_trunc('week', (select d from latest))::date,
+      interval '7 days'
+    ) gs
+  )
+  select w.week_start, sum(v.download_count)::bigint as total_download
+  from weeks w
+  cross join wd
+  cross join lateral (
+    select coalesce(
+      (select ss.download_count from series_snapshots ss
+        where ss.title_id = wd.title_id and ss.snapshot_date <= w.week_start + wd.cp_offset
+        order by ss.snapshot_date desc limit 1),
+      (select ss.download_count from series_snapshots ss
+        where ss.title_id = wd.title_id
+        order by ss.snapshot_date asc limit 1)
+    ) as download_count
+  ) v
+  where w.week_start + 6 <= (select d from latest)
+  group by w.week_start
+  order by w.week_start;
+$$;
+
+grant execute on function genre_download_series_weekly(bigint[]) to anon;
+
 drop function if exists kakao_titles_perf(bigint[]);
 create or replace function kakao_titles_perf(target_ids bigint[])
 returns table (
