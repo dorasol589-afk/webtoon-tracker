@@ -49,6 +49,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <Link href="/recruit" className="hover:text-neutral-900">
                 채용공고
               </Link>
+              <Link href="/launches" className="hover:text-neutral-900">
+                신작 성과
+              </Link>
               <Link href="/stats" className="hover:text-neutral-900">
                 통계
               </Link>

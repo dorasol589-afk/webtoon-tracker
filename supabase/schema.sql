@@ -1937,3 +1937,155 @@ begin
   return n;
 end;
 $$;
+
+-- 신작 월차 성과 비교(/launches)용. 런칭일(1화 등록일, 성인작은 수집기가 처음 발견한 날) 범위에 들어오는 작품들의
+-- 런칭 후 30/60/90일째("1/2/3개월차") 시점과 현재(mark=0)의 성과를 작품 x 시점 단위의 long 형태로 돌려준다.
+-- 각 시점 값은 목표일 +-3일 안에서 가장 가까운 수집값(다운로드=series_snapshots, 댓글=그날 회차 댓글 합계, 별점=title_snapshots).
+-- 목표일이 아직 안 지났거나 그 무렵 수집 기록이 없으면(수집 시작 2026-08-11 이전 구간 등) 값은 null.
+-- genre_tag: 장르 태그 하나로 한정(null이면 전체).
+create or replace function launch_cohort_metrics(from_date date, to_date date, genre_tag text default null)
+returns table (
+  title_id bigint,
+  title_name text,
+  thumbnail_url text,
+  studio_name text,
+  is_adult boolean,
+  is_finished boolean,
+  launch_date date,
+  mark int,
+  dl_date date,
+  download_count bigint,
+  cm_date date,
+  comment_total bigint,
+  star_score numeric
+)
+language sql
+stable
+as $$
+  with latest as (
+    select max(snapshot_date) as d from series_snapshots
+  ),
+  cohort as (
+    select ti.title_id, ti.title_name, ti.thumbnail_url,
+      coalesce(sa.canonical_name, ti.studio_name) as studio_name,
+      ti.is_adult, ti.is_finished,
+      coalesce((select min(e.service_date) from episodes e where e.title_id = ti.title_id), ti.first_seen_at::date) as launch_date
+    from titles ti
+    left join studio_aliases sa on sa.raw_name = ti.studio_name
+    where ti.is_active = true
+      and (genre_tag is null or exists (
+        select 1 from title_tags tg
+        where tg.title_id = ti.title_id and tg.tag_type = 'GENRE' and tg.tag_name = genre_tag
+      ))
+  ),
+  cohort_f as materialized (
+    select * from cohort where launch_date between from_date and to_date
+  ),
+  -- 시점(mark)별 목표일 t와 허용 구간 [lo, hi]: 현재(0)는 가장 최근 값(최근 수집일 이전 전체), 나머지는 목표일 +-3일. 아직 안 지난 목표일은 제외
+  targets as materialized (
+    select c.title_id, m.mark, c.launch_date,
+      case when m.mark = 0 then l.d else c.launch_date + m.mark end as t,
+      case when m.mark = 0 then l.d - 3650 else c.launch_date + m.mark - 3 end as lo,
+      case when m.mark = 0 then l.d else c.launch_date + m.mark + 3 end as hi
+    from cohort_f c
+    cross join latest l
+    cross join (values (0), (30), (60), (90)) as m(mark)
+    where m.mark = 0 or c.launch_date + m.mark <= l.d
+  ),
+  ss as materialized (
+    select s.title_id, s.snapshot_date, max(s.download_count) as download_count
+    from series_snapshots s
+    where s.title_id = any((select array_agg(c.title_id) from cohort_f c)::bigint[])
+    group by s.title_id, s.snapshot_date
+  ),
+  cs as materialized (
+    select c.title_id, c.snapshot_date, sum(c.comment_count) as comment_total
+    from comment_snapshots c
+    where c.title_id = any((select array_agg(f.title_id) from cohort_f f)::bigint[])
+    group by c.title_id, c.snapshot_date
+  ),
+  st as materialized (
+    select t.title_id, t.snapshot_date, t.star_score
+    from title_snapshots t
+    where t.title_id = any((select array_agg(c.title_id) from cohort_f c)::bigint[]) and t.star_score is not null
+  ),
+  dl as (
+    select distinct on (tg.title_id, tg.mark) tg.title_id, tg.mark, s.snapshot_date, s.download_count
+    from targets tg
+    join ss s on s.title_id = tg.title_id and s.snapshot_date between tg.lo and tg.hi
+    order by tg.title_id, tg.mark, abs(s.snapshot_date - tg.t), s.snapshot_date
+  ),
+  cm as (
+    select distinct on (tg.title_id, tg.mark) tg.title_id, tg.mark, c.snapshot_date, c.comment_total
+    from targets tg
+    join cs c on c.title_id = tg.title_id and c.snapshot_date between tg.lo and tg.hi
+    order by tg.title_id, tg.mark, abs(c.snapshot_date - tg.t), c.snapshot_date
+  ),
+  sr as (
+    select distinct on (tg.title_id, tg.mark) tg.title_id, tg.mark, x.star_score
+    from targets tg
+    join st x on x.title_id = tg.title_id and x.snapshot_date between tg.lo and tg.hi
+    order by tg.title_id, tg.mark, abs(x.snapshot_date - tg.t), x.snapshot_date
+  )
+  select c.title_id, c.title_name, c.thumbnail_url, c.studio_name, c.is_adult, c.is_finished, c.launch_date, m.mark,
+    dl.snapshot_date as dl_date, dl.download_count,
+    cm.snapshot_date as cm_date, cm.comment_total::bigint as comment_total,
+    sr.star_score
+  from cohort_f c
+  cross join (values (0), (30), (60), (90)) as m(mark)
+  left join dl on dl.title_id = c.title_id and dl.mark = m.mark
+  left join cm on cm.title_id = c.title_id and cm.mark = m.mark
+  left join sr on sr.title_id = c.title_id and sr.mark = m.mark
+  order by c.title_id, m.mark;
+$$;
+
+grant execute on function launch_cohort_metrics(date, date, text) to anon;
+
+-- 같은 범위 작품들의 "런칭 후 경과일(0~90) -> 누적 다운로드" 곡선. 작품마다 한 행: start_offset부터 하루 간격 배열(수집 안 된 날은 null).
+-- 수집 시작(2026-08-11) 이전에 런칭한 작품은 start_offset이 0보다 크다(그 시점부터의 값만 있음).
+create or replace function launch_download_curves(from_date date, to_date date, genre_tag text default null)
+returns table (
+  title_id bigint,
+  start_offset int,
+  vals bigint[]
+)
+language sql
+stable
+as $$
+  with cohort as (
+    select ti.title_id,
+      coalesce((select min(e.service_date) from episodes e where e.title_id = ti.title_id), ti.first_seen_at::date) as launch_date
+    from titles ti
+    where ti.is_active = true
+      and (genre_tag is null or exists (
+        select 1 from title_tags tg
+        where tg.title_id = ti.title_id and tg.tag_type = 'GENRE' and tg.tag_name = genre_tag
+      ))
+  ),
+  cohort_f as materialized (
+    select * from cohort where launch_date between from_date and to_date
+  ),
+  ss as materialized (
+    select s.title_id, s.snapshot_date, max(s.download_count) as download_count
+    from series_snapshots s
+    where s.title_id = any((select array_agg(c.title_id) from cohort_f c)::bigint[])
+    group by s.title_id, s.snapshot_date
+  ),
+  ranges as (
+    select c.title_id, c.launch_date,
+      min(s.snapshot_date - c.launch_date) as mn,
+      max(s.snapshot_date - c.launch_date) as mx
+    from cohort_f c
+    join ss s on s.title_id = c.title_id and s.snapshot_date - c.launch_date between 0 and 90
+    group by c.title_id, c.launch_date
+  )
+  select r.title_id, r.mn as start_offset,
+    array_agg(s.download_count order by g.g) as vals
+  from ranges r
+  cross join lateral generate_series(r.mn, r.mx) as g(g)
+  left join ss s on s.title_id = r.title_id and s.snapshot_date = r.launch_date + g.g
+  group by r.title_id, r.mn
+  order by r.title_id;
+$$;
+
+grant execute on function launch_download_curves(date, date, text) to anon;
