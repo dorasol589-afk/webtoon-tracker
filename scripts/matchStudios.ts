@@ -9,6 +9,7 @@ loadEnv({ path: ".env.local" });
 loadEnv();
 import pLimit from "p-limit";
 import { getSupabaseAdmin } from "../lib/supabase";
+import { maskAuthorInStudio } from "../lib/naver";
 import fs from "fs";
 
 const USER_AGENT =
@@ -67,7 +68,7 @@ function deriveStudio(cpName: string): { key: string | null; name: string; isCom
   if (cpName.startsWith("다중")) return { key: null, name: "다중", isCompany: false };
   const idx = cpName.indexOf("_");
   if (idx === -1) return { key: null, name: "개인", isCompany: false };
-  const key = cpName.slice(0, idx);
+  const key = maskAuthorInStudio(cpName.slice(0, idx));
   return { key, name: key, isCompany: true };
 }
 

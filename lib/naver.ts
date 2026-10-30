@@ -440,7 +440,13 @@ export function deriveStudioFromCpName(cpName: string): { key: string | null; na
   // "홍길동(필명)_작품명"처럼 괄호가 든 건 작가 개인(필명) 표기 - 단, 앞부분에 회사명(주식회사/스튜디오 등)이
   // 들어있으면 "주식회사어반아트(하일권)"처럼 회사 + 담당 작가 표기라 회사로 둔다
   if (/[(（].*[)）]/.test(key) && !looksLikeCompany(key)) return { key: null, name: "개인" };
-  return { key, name: key };
+  const masked = maskAuthorInStudio(key);
+  return { key: masked, name: masked };
+}
+
+/** "스튜디오숨(안수민)"처럼 회사명 뒤에 붙은 담당 작가 표기는 본명일 수 있어 "(개인)"으로 가려서 저장 */
+export function maskAuthorInStudio(name: string): string {
+  return name.replace(/\s*[(（](?!주[)）]|유[)）])[^()（）]*[)）]\s*$/, "(개인)");
 }
 
 /** 작품 상세(글/그림/원작 작가, 연재요일, 장르/키워드 태그) - 매일 수집기와 단건 엑셀 내보내기가 공유 */
