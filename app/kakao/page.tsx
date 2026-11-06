@@ -1,4 +1,5 @@
 import Link from "next/link";
+import AutoRetry from "@/app/AutoRetry";
 import {
   unifiedSearch,
   getKakaoTopTitles,
@@ -114,7 +115,8 @@ export default async function KakaoHomePage({
 
       {result.type === "error" && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
-          Supabase 연결 설정이 필요합니다.
+          데이터를 불러오지 못했습니다. 자동으로 다시 시도하는 중입니다…
+          <AutoRetry />
         </div>
       )}
 

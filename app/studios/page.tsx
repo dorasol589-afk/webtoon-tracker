@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import AutoRetry from "@/app/AutoRetry";
 import { getTitlesByStudio, getWatchlist } from "@/lib/queries";
 import { WATCHLIST_USER_COOKIE } from "@/lib/watchlistCookie";
 import StudioSearch from "./StudioSearch";
@@ -38,7 +39,8 @@ export default async function StudiosPage() {
 
       {loadError && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
-          Supabase 연결 설정이 필요합니다.
+          데이터를 불러오지 못했습니다. 자동으로 다시 시도하는 중입니다…
+          <AutoRetry />
         </div>
       )}
 
