@@ -122,6 +122,11 @@ export default async function KakaoHomePage({
 
       {result.type === "search" && (
         <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 bg-white">
+          {result.results.length > 0 && result.results.some((r) => r.approximate) && (
+            <li className="bg-amber-50 p-3 text-sm text-amber-800">
+              &quot;{q}&quot;와 정확히 일치하는 작품이 없어 이름이 비슷한 작품을 보여드립니다.
+            </li>
+          )}
           {result.results.length === 0 && (
             <li className="p-4 text-sm text-neutral-500">&quot;{q}&quot;에 대한 검색 결과가 없습니다.</li>
           )}

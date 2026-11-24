@@ -1,6 +1,8 @@
 import { getSupabaseAnon, getSupabaseAdmin, hasAdminAccess } from "./supabase";
 import { SERIES_WATCHLIST } from "./seriesWatchlist";
 import { fetchRealtimeRanking } from "./naver";
+import { fuzzyMatch } from "./fuzzySearch";
+import { findInstantFinishIds } from "./launchCohort";
 
 /** 쓰기 함수 공용 가드: 공유 배포(service role key 없음)에서는 수정 자체가 불가능해야 함 */
 function assertAdminAccess() {
@@ -62,18 +64,45 @@ export async function getTopMovers(limit = 20): Promise<TopMoverRow[]> {
   return (data ?? []) as TopMoverRow[];
 }
 
-/** 작품명으로 검색 (연재중인 작품만) */
-export async function searchTitles(query: string): Promise<TitleRow[]> {
+/** 이름이 정확히 일치하지 않을 때를 위한 전체 작품명 목록 (활성 작품만) */
+async function listActiveNames(table: "titles" | "kakao_titles", idCol: string): Promise<{ id: number; name: string }[]> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase
-    .from("titles")
-    .select("title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,is_adult,is_new,studio_name,studio_website_url,synopsis,writer,painter,origin_author,is_novel_origin")
-    .eq("is_active", true)
-    .ilike("title_name", `%${query}%`)
-    .order("title_name")
-    .limit(50);
+  const out: { id: number; name: string }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(`${idCol},title_name`)
+      .eq("is_active", true)
+      .order(idCol)
+      .range(from, from + 999);
+    if (error) throw error;
+    const rows = (data ?? []) as unknown as Record<string, unknown>[];
+    for (const r of rows) out.push({ id: r[idCol] as number, name: r.title_name as string });
+    if (rows.length < 1000) break;
+  }
+  return out;
+}
+
+export interface SearchResult<T> {
+  rows: T[];
+  /** true면 입력과 정확히 일치하는 작품이 없어 비슷한 이름으로 찾은 결과 */
+  approximate: boolean;
+}
+
+/** 작품명으로 검색 (연재중인 작품만). 정확히 일치하는 결과가 없으면 오타를 허용해 비슷한 이름을 찾는다. */
+export async function searchTitles(query: string): Promise<SearchResult<TitleRow>> {
+  const supabase = getSupabaseAnon();
+  const select = "title_id,title_name,author,thumbnail_url,is_active,is_finished,is_on_hiatus,is_adult,is_new,studio_name,studio_website_url,synopsis,writer,painter,origin_author,is_novel_origin";
+  const { data, error } = await supabase.from("titles").select(select).eq("is_active", true).ilike("title_name", `%${query}%`).order("title_name").limit(50);
   if (error) throw error;
-  return (data ?? []) as TitleRow[];
+  if ((data ?? []).length > 0) return { rows: data as unknown as TitleRow[], approximate: false };
+  const similar = fuzzyMatch(query, await listActiveNames("titles", "title_id"));
+  if (similar.length === 0) return { rows: [], approximate: false };
+  const { data: fuzzy, error: fuzzyError } = await supabase.from("titles").select(select).in("title_id", similar.map((x) => x.id));
+  if (fuzzyError) throw fuzzyError;
+  const order = new Map(similar.map((x, i) => [x.id, i]));
+  const rows = ((fuzzy ?? []) as unknown as TitleRow[]).sort((x, y) => (order.get(x.title_id) ?? 0) - (order.get(y.title_id) ?? 0));
+  return { rows, approximate: true };
 }
 
 export async function getTitle(titleId: number): Promise<TitleRow | null> {
@@ -1621,9 +1650,10 @@ export async function getTagLaunchDatesBatch(tagType: TagType, tagNames: string[
     }
   }
 
+  const instantFinish = await findInstantFinishIds(launchDateById);
   const result: Record<string, string[]> = {};
   for (const tagName of tagNames) {
-    const ids = titleIdsByTag.get(tagName) ?? [];
+    const ids = (titleIdsByTag.get(tagName) ?? []).filter((id) => !instantFinish.has(id));
     result[tagName] = ids.map((id) => launchDateById.get(id)).filter((d): d is string => !!d);
   }
   return result;
@@ -1711,18 +1741,19 @@ export interface KakaoTitleRow {
 const KAKAO_TITLE_SELECT =
   "content_id,seo_id,title_name,thumbnail_url,writer,painter,origin_author,studio_name,synopsis,genres,is_adult,is_finished,is_on_hiatus,is_new,is_active,age_rating";
 
-/** 작품명으로 검색 (연재중인 작품만) */
-export async function searchKakaoTitles(query: string): Promise<KakaoTitleRow[]> {
+/** 작품명으로 검색 (연재중인 작품만). 정확히 일치하는 결과가 없으면 오타를 허용해 비슷한 이름을 찾는다. */
+export async function searchKakaoTitles(query: string): Promise<SearchResult<KakaoTitleRow>> {
   const supabase = getSupabaseAnon();
-  const { data, error } = await supabase
-    .from("kakao_titles")
-    .select(KAKAO_TITLE_SELECT)
-    .eq("is_active", true)
-    .ilike("title_name", `%${query}%`)
-    .order("title_name")
-    .limit(50);
+  const { data, error } = await supabase.from("kakao_titles").select(KAKAO_TITLE_SELECT).eq("is_active", true).ilike("title_name", `%${query}%`).order("title_name").limit(50);
   if (error) throw error;
-  return (data ?? []) as KakaoTitleRow[];
+  if ((data ?? []).length > 0) return { rows: data as unknown as KakaoTitleRow[], approximate: false };
+  const similar = fuzzyMatch(query, await listActiveNames("kakao_titles", "content_id"));
+  if (similar.length === 0) return { rows: [], approximate: false };
+  const { data: fuzzy, error: fuzzyError } = await supabase.from("kakao_titles").select(KAKAO_TITLE_SELECT).in("content_id", similar.map((x) => x.id));
+  if (fuzzyError) throw fuzzyError;
+  const order = new Map(similar.map((x, i) => [x.id, i]));
+  const rows = ((fuzzy ?? []) as unknown as KakaoTitleRow[]).sort((x, y) => (order.get(x.content_id) ?? 0) - (order.get(y.content_id) ?? 0));
+  return { rows, approximate: true };
 }
 
 export async function getKakaoTitle(contentId: number): Promise<KakaoTitleRow | null> {
@@ -1853,11 +1884,15 @@ export interface UnifiedSearchResult {
   totalCommentCount: number | null;
   viewCount: number | null;
   starScore: number | null;
+  /** 정확히 일치하지 않아 오타 허용 검색으로 찾은 결과 */
+  approximate: boolean;
 }
 
 /** 네이버/카카오 작품을 동시에 검색해 플랫폼 구분된 결과로 합쳐 반환 (홈 화면 통합검색용) */
 export async function unifiedSearch(query: string): Promise<UnifiedSearchResult[]> {
-  const [naverResults, kakaoResults] = await Promise.all([searchTitles(query), searchKakaoTitles(query)]);
+  const [naverSearch, kakaoSearch] = await Promise.all([searchTitles(query), searchKakaoTitles(query)]);
+  const naverResults = naverSearch.rows;
+  const kakaoResults = kakaoSearch.rows;
   const [naverPerfMap, kakaoPerfMap] = await Promise.all([
     getNaverTitlesPerf(naverResults.map((t) => t.title_id)),
     getKakaoTitlesPerf(kakaoResults.map((t) => t.content_id)),
@@ -1880,6 +1915,7 @@ export async function unifiedSearch(query: string): Promise<UnifiedSearchResult[
         totalCommentCount: perf?.total_comment_count ?? null,
         viewCount: null,
         starScore: perf?.star_score ?? null,
+        approximate: naverSearch.approximate,
       };
     }),
     ...kakaoResults.map((t) => {
@@ -1900,6 +1936,7 @@ export async function unifiedSearch(query: string): Promise<UnifiedSearchResult[
         totalCommentCount: null,
         viewCount: perf?.view_count ?? null,
         starScore: null,
+        approximate: kakaoSearch.approximate,
       };
     }),
   ];

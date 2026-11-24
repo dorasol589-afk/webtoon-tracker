@@ -111,6 +111,35 @@ interface MetricRow {
 
 const PAGE = 1000;
 
+/** 런칭일과 완결일이 같은 완결작(당일 완결: 단편·일괄 공개 등)은 신작 런칭작 판단과 통계에서 제외한다.
+ * launchDateById: 작품별 런칭일(첫 회차 공개일). 제외 대상 title_id를 반환. */
+export async function findInstantFinishIds(launchDateById: Map<number, string>): Promise<Set<number>> {
+  const supabase = getSupabaseAnon();
+  const ids = [...launchDateById.keys()];
+  const excluded = new Set<number>();
+  const CHUNK = 200;
+  const chunks: number[][] = [];
+  for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+  const results = await Promise.all(
+    chunks.map(async (batch) => {
+      const { data, error } = await supabase
+        .from("titles")
+        .select("title_id,finished_at")
+        .in("title_id", batch)
+        .eq("is_finished", true)
+        .not("finished_at", "is", null);
+      if (error) throw error;
+      return (data ?? []) as { title_id: number; finished_at: string }[];
+    })
+  );
+  for (const rows of results) {
+    for (const r of rows) {
+      if (launchDateById.get(r.title_id) === r.finished_at) excluded.add(r.title_id);
+    }
+  }
+  return excluded;
+}
+
 /** 런칭 기간(+장르)에 들어오는 신작들의 1/2/3개월차 성과와 현재 값, 그리고 런칭 후 경과일별 다운로드 곡선 */
 export async function getLaunchCohort(from: string, to: string, genre: string | null): Promise<LaunchCohort> {
   const supabase = getSupabaseAnon();
@@ -165,6 +194,12 @@ export async function getLaunchCohort(from: string, to: string, genre: string | 
       startOffset: c.start_offset,
       values: c.vals.map((v) => (v === null ? null : Number(v))),
     };
+  }
+
+  const instant = await findInstantFinishIds(new Map([...byId.values()].filter((t) => t.isFinished).map((t) => [t.titleId, t.launchDate])));
+  for (const id of instant) {
+    byId.delete(id);
+    delete curves[id];
   }
 
   return { titles: [...byId.values()], curves };
