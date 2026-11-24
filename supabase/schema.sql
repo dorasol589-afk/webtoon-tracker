@@ -686,6 +686,11 @@ as $$
     from base
     where (filter_launch_from is null or launch_date >= filter_launch_from)
       and (filter_launch_to is null or launch_date <= filter_launch_to)
+      -- 신작 판단: 런칭일과 완결일이 같은 완결작(당일 완결)은 런칭일 필터·신작 필터에서 제외
+      and (
+        (filter_launch_from is null and filter_launch_to is null and coalesce(filter_status, 'all') <> 'new')
+        or not (is_finished and exists (select 1 from titles t2 where t2.title_id = base.title_id and t2.finished_at = base.launch_date))
+      )
   )
   select f.*, count(*) over() as total_count
   from filtered f
@@ -873,6 +878,11 @@ as $$
     from combined
     where (filter_launch_from is null or launch_date >= filter_launch_from)
       and (filter_launch_to is null or launch_date <= filter_launch_to)
+      -- 신작 판단: 런칭일과 완결일이 같은 완결작(당일 완결)은 런칭일 필터·신작 필터에서 제외
+      and (
+        (filter_launch_from is null and filter_launch_to is null and filter_status <> 'new')
+        or not (platform = 'naver' and is_finished and exists (select 1 from titles t2 where t2.title_id = combined.id and t2.finished_at = combined.launch_date))
+      )
   )
   select f.*, count(*) over() as total_count
   from filtered f
@@ -1277,6 +1287,11 @@ as $$
     from combined
     where (filter_launch_from is null or launch_date >= filter_launch_from)
       and (filter_launch_to is null or launch_date <= filter_launch_to)
+      -- 신작 판단: 런칭일과 완결일이 같은 완결작(당일 완결)은 런칭일 필터·신작 필터에서 제외
+      and (
+        (filter_launch_from is null and filter_launch_to is null and filter_status <> 'new')
+        or not (platform = 'naver' and is_finished and exists (select 1 from titles t2 where t2.title_id = combined.id and t2.finished_at = combined.launch_date))
+      )
   )
   select *
   from filtered
@@ -1980,6 +1995,8 @@ as $$
   ),
   cohort_f as materialized (
     select * from cohort where launch_date between from_date and to_date
+      -- 당일 완결(런칭일 = 완결일)은 신작 코호트에서 제외
+      and not exists (select 1 from titles t2 where t2.title_id = cohort.title_id and t2.is_finished and t2.finished_at = cohort.launch_date)
   ),
   -- 시점(mark)별 목표일 t와 허용 구간 [lo, hi]: 현재(0)는 가장 최근 값(최근 수집일 이전 전체), 나머지는 목표일 +-3일. 아직 안 지난 목표일은 제외
   targets as materialized (
@@ -2064,6 +2081,8 @@ as $$
   ),
   cohort_f as materialized (
     select * from cohort where launch_date between from_date and to_date
+      -- 당일 완결(런칭일 = 완결일)은 신작 코호트에서 제외
+      and not exists (select 1 from titles t2 where t2.title_id = cohort.title_id and t2.is_finished and t2.finished_at = cohort.launch_date)
   ),
   ss as materialized (
     select s.title_id, s.snapshot_date, max(s.download_count) as download_count
