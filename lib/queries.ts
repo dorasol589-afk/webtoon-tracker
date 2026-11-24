@@ -64,22 +64,37 @@ export async function getTopMovers(limit = 20): Promise<TopMoverRow[]> {
   return (data ?? []) as TopMoverRow[];
 }
 
-/** 이름이 정확히 일치하지 않을 때를 위한 전체 작품명 목록 (활성 작품만) */
+/** 이름이 정확히 일치하지 않을 때를 위한 전체 작품명 목록 (활성 작품만).
+ * 페이지를 동시에 받고, 서버 인스턴스 메모리에 10분간 둬서 오타 검색이 매번 수천 건을 다시 읽지 않게 한다. */
+const NAME_LIST_TTL_MS = 10 * 60 * 1000;
+const nameListCache = new Map<string, { at: number; items: { id: number; name: string }[] }>();
+
 async function listActiveNames(table: "titles" | "kakao_titles", idCol: string): Promise<{ id: number; name: string }[]> {
+  const hit = nameListCache.get(table);
+  if (hit && Date.now() - hit.at < NAME_LIST_TTL_MS) return hit.items;
   const supabase = getSupabaseAnon();
-  const out: { id: number; name: string }[] = [];
-  for (let from = 0; ; from += 1000) {
+  const fetchPage = async (page: number) => {
     const { data, error } = await supabase
       .from(table)
       .select(`${idCol},title_name`)
       .eq("is_active", true)
       .order(idCol)
-      .range(from, from + 999);
+      .range(page * 1000, page * 1000 + 999);
     if (error) throw error;
-    const rows = (data ?? []) as unknown as Record<string, unknown>[];
-    for (const r of rows) out.push({ id: r[idCol] as number, name: r.title_name as string });
-    if (rows.length < 1000) break;
+    return (data ?? []) as unknown as Record<string, unknown>[];
+  };
+  const out: { id: number; name: string }[] = [];
+  const BATCH = 4;
+  for (let page = 0; ; page += BATCH) {
+    const rowsByPage = await Promise.all(Array.from({ length: BATCH }, (_, i) => fetchPage(page + i)));
+    let done = false;
+    for (const rows of rowsByPage) {
+      for (const r of rows) out.push({ id: r[idCol] as number, name: r.title_name as string });
+      if (rows.length < 1000) done = true;
+    }
+    if (done) break;
   }
+  nameListCache.set(table, { at: Date.now(), items: out });
   return out;
 }
 
