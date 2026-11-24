@@ -576,13 +576,17 @@ async function main() {
   }
 
   console.log(`[8/10] 신작 시리즈 자동 매칭 + 네이버 시리즈 다운로드수 수집 (우선 추적 5개 + 매칭된 전체)...`);
-  // 시리즈 매칭을 아직 시도해본 적 없는(series_match_checked_at이 null인) 작품만 새로 시도.
-  // 신작이 매일 생기므로 이 단계가 매일 조금씩 돌면서 자동으로 시리즈에 연결해준다.
-  // 성공/실패 상관없이 시도했으면 checked_at을 찍어서 매번 똑같이 실패하는 작품을 계속
-  // 재검색하지 않게 함(네트워크 오류로 시도 자체가 실패한 건 checked_at을 찍지 않고 다음날 재시도).
+  // 시리즈 매칭을 아직 시도해본 적 없거나(series_match_checked_at이 null) 마지막 시도 후 7일이 지난 작품 중
+  // 아직 시리즈에 연결되지 않은 작품을 시도한다. 신작은 웹툰 런칭 직후엔 네이버 시리즈에 작품 페이지가 아직 없는 경우가
+  // 있어서(예: 원더랜드는 런칭 직후 한 번만 시도해 못 찾은 뒤 영영 재시도하지 않아 다운로드가 비어 있었음) 일주일마다 다시 확인한다.
+  // 시도했으면 checked_at을 찍어서 같은 작품을 매일 재검색하지 않게 함(네트워크 오류로 시도 자체가 실패한 건
+  // checked_at을 찍지 않고 다음날 재시도).
   if (supabase) {
+    const rematchCutoff = new Date(Date.now() - 7 * 86400000).toISOString();
+    const linkedRows = await fetchAllRows<{ title_id: number }>(supabase, "series_products", "title_id", (q) => q);
+    const linkedIds = new Set((linkedRows ?? []).map((r) => r.title_id));
     // 완결 후 기간이 지난 작품은 다운로드수 추적 대상이 아니므로 매칭 시도도 하지 않음(최근 완결작은 포함)
-    const unchecked = await fetchAllRows<{ title_id: number; title_name: string }>(
+    const candidates = await fetchAllRows<{ title_id: number; title_name: string }>(
       supabase,
       "titles",
       "title_id,title_name",
@@ -590,8 +594,9 @@ async function main() {
         q
           .eq("is_active", true)
           .or(`is_finished.eq.false,finished_at.gte.${finishedCutoff}`)
-          .is("series_match_checked_at", null)
+          .or(`series_match_checked_at.is.null,series_match_checked_at.lt.${rematchCutoff}`)
     );
+    const unchecked = (candidates ?? []).filter((t) => !linkedIds.has(t.title_id));
     if (unchecked && unchecked.length > 0) {
       console.log(`  시리즈 미확인 작품 ${unchecked.length}개 자동 매칭 시도...`);
       const matchLimit = pLimit(4);
